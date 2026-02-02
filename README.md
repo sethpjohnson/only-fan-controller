@@ -39,8 +39,8 @@ docker run -d \
   --gpus all \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -p 8086:8086 \
-  -v ./config.yaml:/etc/smart-fan-controller/config.yaml:ro \
-  -v ./data:/var/lib/smart-fan-controller \
+  -v ./config.yaml:/etc/only-fan-controller/config.yaml:ro \
+  -v ./data:/var/lib/only-fan-controller \
   only-fan-controller:latest
 ```
 
@@ -208,7 +208,7 @@ All config options can be overridden via environment variables:
 
 ## Unraid Installation
 
-1. Copy `unraid/smart-fan-controller.xml` to `/boot/config/plugins/dockerMan/templates-user/`
+1. Copy `unraid/only-fan-controller.xml` to `/boot/config/plugins/dockerMan/templates-user/`
 2. Configure via the Unraid Docker UI
 3. Or use Community Applications (search "Only Fan Controller")
 

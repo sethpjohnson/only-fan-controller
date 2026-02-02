@@ -133,11 +133,11 @@ func Default() *Config {
 			Port:    8086,
 		},
 		Storage: StorageConfig{
-			Path: "/var/lib/smart-fan-controller/history.db",
+			Path: "/var/lib/only-fan-controller/history.db",
 		},
 		Logging: LoggingConfig{
 			Level: "info",
-			File:  "/var/log/smart-fan-controller.log",
+			File:  "/var/log/only-fan-controller.log",
 		},
 	}
 }

@@ -200,7 +200,7 @@ dashboard:
 
 logging:
   level: "info"
-  file: "/var/log/smart-fan-controller.log"
+  file: "/var/log/only-fan-controller.log"
 ```
 
 ## API Endpoints
@@ -277,7 +277,7 @@ For Unraid, provide:
 ## File Structure
 
 ```
-idrac-smart-fan-controller/
+idrac-only-fan-controller/
 ├── SPEC.md
 ├── README.md
 ├── Dockerfile
@@ -308,7 +308,7 @@ idrac-smart-fan-controller/
 │   ├── package.json
 │   └── vite.config.js
 ├── unraid/
-│   ├── smart-fan-controller.xml    # Docker template
+│   ├── only-fan-controller.xml    # Docker template
 │   └── plugin/                      # Optional Unraid plugin
 └── scripts/
     └── hint-client.sh              # Example hint script

@@ -40,5 +40,5 @@
   <Config Name="Fan Step Size" Target="FAN_STEP_SIZE" Default="10" Mode="" Description="Fan speed increase per 5°C over threshold (%)" Type="Variable" Display="advanced" Required="false" Mask="false">10</Config>
   <Config Name="Cooldown Delay" Target="FAN_COOLDOWN_DELAY" Default="60" Mode="" Description="Seconds below threshold before ramping fans down" Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>
   <Config Name="Check Interval" Target="CHECK_INTERVAL" Default="10" Mode="" Description="Seconds between temperature checks" Type="Variable" Display="advanced" Required="false" Mask="false">10</Config>
-  <Config Name="Data Directory" Target="/var/lib/smart-fan-controller" Default="/mnt/user/appdata/only-fan-controller/data" Mode="rw" Description="Data storage for history database" Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/only-fan-controller/data</Config>
+  <Config Name="Data Directory" Target="/var/lib/only-fan-controller" Default="/mnt/user/appdata/only-fan-controller/data" Mode="rw" Description="Data storage for history database" Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/only-fan-controller/data</Config>
 </Container>

@@ -35,8 +35,8 @@ dashboard:
   port: 8086                 # Same as API (served at /dashboard)
 
 storage:
-  path: "/var/lib/smart-fan-controller/history.db"
+  path: "/var/lib/only-fan-controller/history.db"
 
 logging:
   level: "info"              # debug, info, warn, error
-  file: "/var/log/smart-fan-controller.log"
+  file: "/var/log/only-fan-controller.log"

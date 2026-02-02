@@ -18,9 +18,9 @@ services:
     
     volumes:
       # Config file
-      - ./config.yaml:/etc/smart-fan-controller/config.yaml:ro
+      - ./config.yaml:/etc/only-fan-controller/config.yaml:ro
       # Persistent storage for history
-      - only-fan-data:/var/lib/smart-fan-controller
+      - only-fan-data:/var/lib/only-fan-controller
     
     ports:
       - "8086:8086"

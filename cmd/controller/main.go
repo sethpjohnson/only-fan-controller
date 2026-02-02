@@ -99,7 +99,7 @@ type FanControllerInterface interface {
 }
 
 func main() {
-	configPath := flag.String("config", "/etc/smart-fan-controller/config.yaml", "Path to configuration file")
+	configPath := flag.String("config", "/etc/only-fan-controller/config.yaml", "Path to configuration file")
 	demoMode := flag.Bool("demo", false, "Run in demo mode with simulated temperatures (no actual fan control)")
 	flag.Parse()
 
