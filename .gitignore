@@ -1,0 +1,27 @@
+# Binaries
+only-fan-controller
+smart-fan-controller
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+*.db
+
+# Local config (keep example)
+config.yaml
+!config.example.yaml
+
+# Test output
+coverage.out
+*.test
+controller

@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="apple-touch-icon" sizes="57x57" href="/dashboard/favicon-57x57.png">
+    <link rel="apple-touch-icon" sizes="60x60" href="/dashboard/favicon-60x60.png">
+    <link rel="apple-touch-icon" sizes="72x72" href="/dashboard/favicon-72x72.png">
+    <link rel="apple-touch-icon" sizes="76x76" href="/dashboard/favicon-76x76.png">
+    <link rel="apple-touch-icon" sizes="114x114" href="/dashboard/favicon-114x114.png">
+    <link rel="apple-touch-icon" sizes="120x120" href="/dashboard/favicon-120x120.png">
+    <link rel="apple-touch-icon" sizes="144x144" href="/dashboard/favicon-144x144.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="/dashboard/favicon-152x152.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/dashboard/favicon-180x180.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/dashboard/favicon-16x16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/dashboard/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="96x96" href="/dashboard/favicon-96x96.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="/dashboard/favicon-192x192.png">
+    <link rel="shortcut icon" type="image/x-icon" href="/dashboard/favicon.ico">
+    <link rel="icon" type="image/x-icon" href="/dashboard/favicon.ico">
+    <meta name="msapplication-TileColor" content="#ffffff">
+    <meta name="msapplication-TileImage" content="/favicon-144x144.png">
+    <meta name="msapplication-config" content="/browserconfig.xml">
+    <title>Only Fan Controller</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <style>
+        :root {
+            --bg-dark: #1a1a2e;
+            --bg-card: #16213e;
+            --text-primary: #eee;
+            --text-secondary: #aaa;
+            --accent-blue: #4a9eff;
+            --accent-green: #4ade80;
+            --accent-yellow: #fbbf24;
+            --accent-red: #f87171;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+        }
+
+        .header .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85rem;
+            margin-top: 8px;
+        }
+
+        .status-badge.idle { background: var(--accent-green); color: #000; }
+        .status-badge.normal { background: var(--accent-blue); color: #fff; }
+        .status-badge.warm { background: var(--accent-yellow); color: #000; }
+        .status-badge.hot { background: var(--accent-red); color: #fff; }
+        .status-badge.critical { background: #7f1d1d; color: #fff; }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .card h2 {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            margin-bottom: 15px;
+        }
+
+        .temp-display {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+        }
+
+        .temp-value {
+            font-size: 3rem;
+            font-weight: 700;
+        }
+
+        .temp-unit {
+            font-size: 1.5rem;
+            color: var(--text-secondary);
+        }
+
+        .temp-trend {
+            font-size: 0.9rem;
+            margin-top: 8px;
+        }
+
+        .trend-up { color: var(--accent-red); }
+        .trend-down { color: var(--accent-green); }
+        .trend-stable { color: var(--text-secondary); }
+
+        .fan-speed {
+            text-align: center;
+        }
+
+        .fan-gauge {
+            width: 150px;
+            height: 150px;
+            margin: 0 auto 15px;
+            position: relative;
+        }
+
+        .fan-gauge svg {
+            transform: rotate(-90deg);
+        }
+
+        .fan-gauge circle {
+            fill: none;
+            stroke-width: 12;
+        }
+
+        .fan-gauge .bg {
+            stroke: #333;
+        }
+
+        .fan-gauge .fill {
+            stroke: var(--accent-blue);
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.5s ease;
+        }
+
+        .fan-value {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 2rem;
+            font-weight: 700;
+        }
+
+        .gpu-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .gpu-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+        }
+
+        .gpu-name {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .gpu-temp {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .hints-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .hint-item {
+            padding: 10px;
+            background: rgba(74, 158, 255, 0.1);
+            border-left: 3px solid var(--accent-blue);
+            border-radius: 4px;
+        }
+
+        .hint-source {
+            font-weight: 600;
+        }
+
+        .hint-details {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .no-hints {
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        .chart-container {
+            grid-column: 1 / -1;
+            height: 300px;
+        }
+
+        .mode-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+            font-size: 0.85rem;
+        }
+
+        .mode-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+        }
+
+        .mode-dot.override { background: var(--accent-yellow); }
+        .mode-dot.hinted { background: var(--accent-blue); }
+
+        @media (max-width: 600px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🌀 Only Fan Controller</h1>
+        <div class="status-badge" id="zone-badge">Loading...</div>
+    </div>
+
+    <div class="dashboard">
+        <div class="card">
+            <h2>CPU Temperatures</h2>
+            <div class="gpu-list" id="cpu-list">
+                <div class="no-hints">Loading...</div>
+            </div>
+            <div class="temp-trend" id="cpu-trend" style="margin-top: 12px;">--</div>
+            <div class="threshold-info" id="cpu-threshold" style="margin-top: 8px; font-size: 0.8rem; color: var(--text-secondary);">--</div>
+        </div>
+
+        <div class="card fan-speed">
+            <h2>Fan Speed</h2>
+            <div class="fan-gauge">
+                <svg viewBox="0 0 150 150">
+                    <circle class="bg" cx="75" cy="75" r="60"/>
+                    <circle class="fill" id="fan-arc" cx="75" cy="75" r="60" 
+                            stroke-dasharray="377" stroke-dashoffset="377"/>
+                </svg>
+                <div class="fan-value"><span id="fan-speed">--</span>%</div>
+            </div>
+            <div class="mode-indicator">
+                <div class="mode-dot" id="mode-dot"></div>
+                <span id="mode-text">Auto</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>GPU Temperatures</h2>
+            <div class="gpu-list" id="gpu-list">
+                <div class="no-hints">No GPUs detected</div>
+            </div>
+            <div class="threshold-info" id="gpu-threshold" style="margin-top: 12px; font-size: 0.8rem; color: var(--text-secondary);">--</div>
+        </div>
+
+        <div class="card">
+            <h2>Active Hints</h2>
+            <div class="hints-list" id="hints-list">
+                <div class="no-hints">No active hints</div>
+            </div>
+        </div>
+
+        <div class="card chart-container">
+            <h2>Temperature History</h2>
+            <canvas id="temp-chart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        let chart = null;
+        let zones = [];
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                updateDashboard(data);
+            } catch (err) {
+                console.error('Failed to fetch status:', err);
+            }
+        }
+
+        function isMobile() {
+            return window.innerWidth < 768;
+        }
+
+        async function fetchHistory() {
+            try {
+                // Shorter duration on mobile (15 min vs 1 hour)
+                const duration = isMobile() ? 900 : 3600;
+                const res = await fetch(`/api/history?duration=${duration}`);
+                const data = await res.json();
+                
+                let history = data.data || [];
+                
+                // Downsample on mobile - keep every Nth point
+                if (isMobile() && history.length > 30) {
+                    const step = Math.ceil(history.length / 30);
+                    history = history.filter((_, i) => i % step === 0);
+                }
+                
+                updateChart(history);
+            } catch (err) {
+                console.error('Failed to fetch history:', err);
+            }
+        }
+
+        function updateDashboard(data) {
+            // CPUs - show each CPU like GPUs
+            const cpuList = document.getElementById('cpu-list');
+            if (data.cpu?.Temps?.length > 0) {
+                cpuList.innerHTML = data.cpu.Temps.map((temp, idx) => `
+                    <div class="gpu-item">
+                        <div>
+                            <div class="gpu-name">CPU ${idx + 1}</div>
+                        </div>
+                        <div class="gpu-temp">${temp}°C</div>
+                    </div>
+                `).join('');
+            } else {
+                cpuList.innerHTML = '<div class="no-hints">No CPU data</div>';
+            }
+
+            // CPU trend
+            const cpuTrend = data.cpu_trend ?? 0;
+            const cpuTrendEl = document.getElementById('cpu-trend');
+            if (cpuTrend > 0.5) {
+                cpuTrendEl.textContent = `↑ Rising ${cpuTrend.toFixed(1)}°C/min`;
+                cpuTrendEl.className = 'temp-trend trend-up';
+            } else if (cpuTrend < -0.5) {
+                cpuTrendEl.textContent = `↓ Falling ${Math.abs(cpuTrend).toFixed(1)}°C/min`;
+                cpuTrendEl.className = 'temp-trend trend-down';
+            } else {
+                cpuTrendEl.textContent = '→ Stable';
+                cpuTrendEl.className = 'temp-trend trend-stable';
+            }
+
+            // Store thresholds for chart annotations
+            if (data.cpu_threshold) {
+                cpuThreshold = data.cpu_threshold;
+            }
+            if (data.gpu_threshold) {
+                gpuThreshold = data.gpu_threshold;
+            }
+
+            // Show CPU threshold info
+            const cpuMax = data.cpu?.Max ?? 0;
+            const cpuThresholdEl = document.getElementById('cpu-threshold');
+            const headroom = cpuThreshold - cpuMax;
+            if (headroom > 0) {
+                cpuThresholdEl.textContent = `${headroom}°C below threshold (${cpuThreshold}°C)`;
+            } else {
+                cpuThresholdEl.textContent = `⚠️ ${Math.abs(headroom)}°C over threshold!`;
+                cpuThresholdEl.style.color = 'var(--accent-red)';
+            }
+
+            // Show GPU threshold info
+            const gpuMax = data.gpu?.Max ?? 0;
+            const gpuThresholdEl = document.getElementById('gpu-threshold');
+            const gpuHeadroom = gpuThreshold - gpuMax;
+            if (gpuHeadroom > 0) {
+                gpuThresholdEl.textContent = `${gpuHeadroom}°C below threshold (${gpuThreshold}°C)`;
+                gpuThresholdEl.style.color = 'var(--text-secondary)';
+            } else {
+                gpuThresholdEl.textContent = `⚠️ ${Math.abs(gpuHeadroom)}°C over threshold!`;
+                gpuThresholdEl.style.color = 'var(--accent-red)';
+            }
+
+            // Fan
+            const fanSpeed = data.current_speed ?? 0;
+            document.getElementById('fan-speed').textContent = fanSpeed;
+            const arc = document.getElementById('fan-arc');
+            const offset = 377 - (377 * fanSpeed / 100);
+            arc.style.strokeDashoffset = offset;
+
+            // Mode
+            const modeDot = document.getElementById('mode-dot');
+            const modeText = document.getElementById('mode-text');
+            modeDot.className = 'mode-dot ' + (data.mode ?? 'auto');
+            modeText.textContent = data.mode === 'override' ? 'Override' : 
+                                   data.mode === 'hinted' ? 'Hinted' : 'Auto';
+
+            // Zone
+            const zoneBadge = document.getElementById('zone-badge');
+            zoneBadge.textContent = (data.zone ?? 'unknown').toUpperCase();
+            zoneBadge.className = 'status-badge ' + (data.zone ?? '');
+
+            // GPUs
+            const gpuList = document.getElementById('gpu-list');
+            if (data.gpu?.Devices?.length > 0) {
+                gpuList.innerHTML = data.gpu.Devices.map(gpu => `
+                    <div class="gpu-item">
+                        <div>
+                            <div class="gpu-name">${gpu.name}</div>
+                            <div style="font-size:0.75rem;color:#666">
+                                ${gpu.utilization}% util | ${gpu.power_draw}W
+                            </div>
+                        </div>
+                        <div class="gpu-temp">${gpu.temp}°C</div>
+                    </div>
+                `).join('');
+            } else {
+                gpuList.innerHTML = '<div class="no-hints">No GPUs detected</div>';
+            }
+
+            // Hints
+            const hintsList = document.getElementById('hints-list');
+            if (data.active_hints?.length > 0) {
+                hintsList.innerHTML = data.active_hints.map(hint => `
+                    <div class="hint-item">
+                        <div class="hint-source">${hint.source}</div>
+                        <div class="hint-details">
+                            ${hint.type} | ${hint.intensity} intensity | 
+                            min ${hint.min_fan_speed}%
+                        </div>
+                    </div>
+                `).join('');
+            } else {
+                hintsList.innerHTML = '<div class="no-hints">No active hints</div>';
+            }
+        }
+
+        let cpuThreshold = 65;
+        let gpuThreshold = 60;
+
+        function getZoneAnnotations() {
+            const annotations = {};
+            
+            // CPU threshold line
+            annotations['cpu-threshold'] = {
+                type: 'line',
+                yMin: cpuThreshold,
+                yMax: cpuThreshold,
+                borderColor: 'rgba(248, 113, 113, 0.6)',  // red
+                borderWidth: 2,
+                borderDash: [5, 5],
+                label: {
+                    display: !isMobile(),
+                    content: `CPU ${cpuThreshold}°`,
+                    position: 'start',
+                    backgroundColor: 'rgba(248, 113, 113, 0.8)',
+                    font: { size: 10 }
+                }
+            };
+            
+            // GPU threshold line
+            annotations['gpu-threshold'] = {
+                type: 'line',
+                yMin: gpuThreshold,
+                yMax: gpuThreshold,
+                borderColor: 'rgba(74, 222, 128, 0.6)',   // green
+                borderWidth: 2,
+                borderDash: [5, 5],
+                label: {
+                    display: !isMobile(),
+                    content: `GPU ${gpuThreshold}°`,
+                    position: 'end',
+                    backgroundColor: 'rgba(74, 222, 128, 0.8)',
+                    font: { size: 10 }
+                }
+            };
+            
+            return annotations;
+        }
+
+        function formatTime(ts) {
+            // Handle Unix timestamp (seconds) or ISO string
+            let date;
+            if (typeof ts === 'number') {
+                date = new Date(ts * 1000);
+            } else {
+                date = new Date(ts);
+            }
+            
+            // Show HH:MM format
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function updateChart(history) {
+            const ctx = document.getElementById('temp-chart').getContext('2d');
+            
+            const labels = history.map(p => formatTime(p.timestamp));
+            const cpuData = history.map(p => p.cpu_temp);
+            const gpuData = history.map(p => p.gpu_temp);
+            const fanData = history.map(p => p.fan_speed);
+
+            if (chart) {
+                chart.data.labels = labels;
+                chart.data.datasets[0].data = cpuData;
+                chart.data.datasets[1].data = gpuData;
+                chart.data.datasets[2].data = fanData;
+                // Update annotations with current zones
+                chart.options.plugins.annotation.annotations = getZoneAnnotations();
+                chart.update('none');
+                return;
+            }
+
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'CPU °C',
+                            data: cpuData,
+                            borderColor: '#f87171',
+                            backgroundColor: 'rgba(248, 113, 113, 0.1)',
+                            tension: 0.3,
+                            fill: true,
+                        },
+                        {
+                            label: 'GPU °C',
+                            data: gpuData,
+                            borderColor: '#4ade80',
+                            backgroundColor: 'rgba(74, 222, 128, 0.1)',
+                            tension: 0.3,
+                            fill: true,
+                        },
+                        {
+                            label: 'Fan %',
+                            data: fanData,
+                            borderColor: '#4a9eff',
+                            borderDash: [5, 5],
+                            tension: 0.3,
+                            fill: false,
+                            yAxisID: 'y1',
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index',
+                    },
+                    plugins: {
+                        legend: {
+                            labels: { color: '#aaa' }
+                        },
+                        annotation: {
+                            annotations: getZoneAnnotations()
+                        }
+                    },
+                    scales: {
+                        x: {
+                            ticks: { color: '#666', maxTicksLimit: 10 },
+                            grid: { color: '#333' }
+                        },
+                        y: {
+                            type: 'linear',
+                            position: 'left',
+                            min: 0,
+                            max: 100,
+                            ticks: { color: '#666' },
+                            grid: { color: '#333' },
+                            title: {
+                                display: true,
+                                text: 'Temperature °C',
+                                color: '#666'
+                            }
+                        },
+                        y1: {
+                            type: 'linear',
+                            position: 'right',
+                            min: 0,
+                            max: 100,
+                            ticks: { color: '#666' },
+                            grid: { display: false },
+                            title: {
+                                display: true,
+                                text: 'Fan %',
+                                color: '#666'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Initial fetch
+        fetchStatus();
+        fetchHistory();
+
+        // Poll every 5 seconds
+        setInterval(fetchStatus, 5000);
+        setInterval(fetchHistory, 30000);
+    </script>
+</body>
+</html>

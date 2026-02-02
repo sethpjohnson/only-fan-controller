@@ -1,0 +1,42 @@
+# Only Fan Controller Configuration
+
+idrac:
+  host: "local"              # "local" for direct access, or IP address for remote
+  username: "root"           # Only needed for remote access
+  password: "calvin"         # Only needed for remote access
+
+monitoring:
+  interval: 10               # Seconds between temperature checks
+  history_retention: 3600    # Seconds of history to keep (1 hour)
+
+gpu:
+  enabled: true
+  nvidia_smi_path: "/usr/bin/nvidia-smi"
+
+# Fan control with simple threshold-based logic
+# - Stay at idle_speed when temps are below thresholds
+# - Increase fan speed when CPU or GPU exceeds threshold
+# - Wait cooldown_delay before ramping back down (prevents oscillation)
+fan_control:
+  min_speed: 5               # Never go below this (%)
+  max_speed: 100             # Never exceed this (%)
+  idle_speed: 20             # Base fan speed when cool (%)
+  cpu_threshold: 65          # Bump fans when CPU exceeds this (°C)
+  gpu_threshold: 60          # Bump fans when GPU exceeds this (°C)
+  step_size: 10              # Fan speed increment per 5°C over threshold (%)
+  cooldown_delay: 60         # Seconds below threshold before ramping down
+
+api:
+  host: "0.0.0.0"
+  port: 8086
+
+dashboard:
+  enabled: true
+  port: 8086                 # Same as API (served at /dashboard)
+
+storage:
+  path: "/var/lib/smart-fan-controller/history.db"
+
+logging:
+  level: "info"              # debug, info, warn, error
+  file: "/var/log/smart-fan-controller.log"

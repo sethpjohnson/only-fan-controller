@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  only-fan-controller:
+    build: .
+    image: only-fan-controller:latest
+    container_name: only-fan-controller
+    restart: unless-stopped
+    
+    # For GPU monitoring with NVIDIA Container Toolkit
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      # Override config via environment (optional)
+      # - FAN_IDLE_SPEED=20
+      # - FAN_CPU_THRESHOLD=65
+      # - FAN_GPU_THRESHOLD=60
+    
+    volumes:
+      # Config file
+      - ./config.yaml:/etc/smart-fan-controller/config.yaml:ro
+      # Persistent storage for history
+      - only-fan-data:/var/lib/smart-fan-controller
+    
+    ports:
+      - "8086:8086"
+    
+    # For local IPMI access (uncomment if running on the server itself)
+    # devices:
+    #   - /dev/ipmi0:/dev/ipmi0:rw
+
+volumes:
+  only-fan-data:

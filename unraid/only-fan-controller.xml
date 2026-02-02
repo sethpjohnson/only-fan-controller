@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>OnlyFanController</Name>
+  <Repository>ghcr.io/sethpjohnson/only-fan-controller:latest</Repository>
+  <Registry>https://ghcr.io/</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project>https://github.com/sethpjohnson/only-fan-controller</Project>
+  <Overview>
+    🌀 Only Fan Controller - Intelligent fan control for Dell PowerEdge servers.
+    
+    Simple threshold-based control with hysteresis to prevent oscillation.
+    Monitors CPU and GPU temperatures via IPMI and nvidia-smi.
+    Includes workload hints API for proactive cooling and a real-time web dashboard.
+    
+    No config file needed - all settings via template variables!
+  </Overview>
+  <Category>Tools: System:Other</Category>
+  <WebUI>http://[IP]:[PORT:8086]/dashboard/</WebUI>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/sethpjohnson/only-fan-controller/main/icon.png</Icon>
+  <ExtraParams>--runtime=nvidia</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Web UI Port" Target="8086" Default="8086" Mode="tcp" Description="Port for the web dashboard and API" Type="Port" Display="always" Required="true" Mask="false">8086</Config>
+  <Config Name="iDRAC Host" Target="IDRAC_HOST" Default="" Mode="" Description="iDRAC IP address (e.g. 192.168.1.100)" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="iDRAC Username" Target="IDRAC_USERNAME" Default="root" Mode="" Description="iDRAC username" Type="Variable" Display="always" Required="true" Mask="false">root</Config>
+  <Config Name="iDRAC Password" Target="IDRAC_PASSWORD" Default="" Mode="" Description="iDRAC password" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="Enable GPU Monitoring" Target="GPU_ENABLED" Default="true" Mode="" Description="Enable NVIDIA GPU temperature monitoring" Type="Variable" Display="always" Required="false" Mask="false">true</Config>
+  <Config Name="Idle Fan Speed" Target="FAN_IDLE_SPEED" Default="20" Mode="" Description="Base fan speed when temps are below thresholds (%)" Type="Variable" Display="always" Required="false" Mask="false">20</Config>
+  <Config Name="CPU Threshold" Target="FAN_CPU_THRESHOLD" Default="65" Mode="" Description="Increase fans when CPU exceeds this temp (°C)" Type="Variable" Display="always" Required="false" Mask="false">65</Config>
+  <Config Name="GPU Threshold" Target="FAN_GPU_THRESHOLD" Default="60" Mode="" Description="Increase fans when GPU exceeds this temp (°C)" Type="Variable" Display="always" Required="false" Mask="false">60</Config>
+  <Config Name="Fan Step Size" Target="FAN_STEP_SIZE" Default="10" Mode="" Description="Fan speed increase per 5°C over threshold (%)" Type="Variable" Display="advanced" Required="false" Mask="false">10</Config>
+  <Config Name="Cooldown Delay" Target="FAN_COOLDOWN_DELAY" Default="60" Mode="" Description="Seconds below threshold before ramping fans down" Type="Variable" Display="advanced" Required="false" Mask="false">60</Config>
+  <Config Name="Check Interval" Target="CHECK_INTERVAL" Default="10" Mode="" Description="Seconds between temperature checks" Type="Variable" Display="advanced" Required="false" Mask="false">10</Config>
+  <Config Name="Data Directory" Target="/var/lib/smart-fan-controller" Default="/mnt/user/appdata/only-fan-controller/data" Mode="rw" Description="Data storage for history database" Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/only-fan-controller/data</Config>
+</Container>
