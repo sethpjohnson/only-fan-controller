@@ -1,6 +1,7 @@
-# Binaries
-only-fan-controller
-smart-fan-controller
+# Binaries (in root or cmd folder)
+/only-fan-controller
+/smart-fan-controller
+/cmd/controller/controller
 *.exe
 
 # IDE
@@ -24,4 +25,3 @@ config.yaml
 # Test output
 coverage.out
 *.test
-controller
