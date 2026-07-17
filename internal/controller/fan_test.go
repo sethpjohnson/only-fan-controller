@@ -464,6 +464,57 @@ func TestFailsafeRetriesRestoreUntilConfirmed(t *testing.T) {
 	}
 }
 
+// TestSensorFailsafeUnconfirmedStillRefreshesStatus reproduces sensors
+// recovering while the BMC auto hand-back is still unconfirmed (e.g. reads
+// work but RestoreAutoMode keeps failing). Manual control must NOT be
+// reclaimed yet, but a successful read must still be visible via
+// /api/status -- mirroring the sticky write-failsafe branch, which
+// deliberately keeps refreshing readings for status visibility.
+func TestSensorFailsafeUnconfirmedStillRefreshesStatus(t *testing.T) {
+	rec := &cmdRecorder{failRestore: true}
+	cfg := testConfig()
+	cfg.FanControl.SensorFailureLimit = 3
+	cpu := &flakyCPU{failFor: 3, max: 61}
+	fc := NewFanController(cfg, cpu, staticGPU{max: 40}, newTestStore(t))
+	fc.runCommand = rec.run
+	fc.currentSpeed = 40
+
+	// 3 failing reads -> enter sensor fail-safe; the restore attempt itself
+	// fails (BMC unreachable), so restoreConfirmed stays false.
+	fc.controlLoop()
+	fc.controlLoop()
+	fc.controlLoop()
+	if fc.currentFailsafeCause() != failsafeSensor {
+		t.Fatalf("expected sensor fail-safe after 3 failures, got %v", fc.currentFailsafeCause())
+	}
+	if fc.isRestoreConfirmed() {
+		t.Fatal("restore should not be confirmed while BMC is unreachable")
+	}
+
+	// 4th read succeeds, but the BMC auto hand-back is still unconfirmed, so
+	// manual control must stay deferred.
+	fc.controlLoop()
+	if fc.currentFailsafeCause() != failsafeSensor {
+		t.Fatalf("fail-safe cleared before restore was confirmed: %v", fc.currentFailsafeCause())
+	}
+	if fc.isRestoreConfirmed() {
+		t.Fatal("restore should still be unconfirmed (BMC still unreachable)")
+	}
+	if got := rec.manualModeCount(); got != 0 {
+		t.Fatalf("manual mode reclaimed before restore was confirmed: %d toggles", got)
+	}
+
+	// /api/status must reflect the fresh reading even though we are still
+	// waiting on restore confirmation.
+	status := fc.GetStatus()
+	if !status.RestorePending {
+		t.Fatal("expected restore_pending while unconfirmed")
+	}
+	if status.CPU == nil || status.CPU.Max != 61 {
+		t.Fatalf("status did not reflect fresh reading during unconfirmed sensor fail-safe: %+v", status.CPU)
+	}
+}
+
 func TestSetFanSpeedOnlyUpdatesCurrentSpeedOnSuccess(t *testing.T) {
 	rec := &cmdRecorder{failOnFanSet: true}
 	fc := NewFanController(testConfig(), nil, nil, nil)

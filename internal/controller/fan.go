@@ -248,6 +248,7 @@ func (fc *FanController) controlLoop() {
 	if fc.currentFailsafeCause() == failsafeSensor {
 		if !fc.isRestoreConfirmed() {
 			log.Printf("Sensors recovered but BMC auto hand-back not yet confirmed; deferring manual reclaim")
+			fc.recordReadings(cpuReading, gpuReading)
 			return
 		}
 		if err := fc.enableManualMode(); err != nil {
