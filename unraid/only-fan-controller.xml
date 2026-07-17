@@ -33,6 +33,7 @@
   <Config Name="iDRAC Host" Target="IDRAC_HOST" Default="" Mode="" Description="iDRAC IP address (e.g. 192.168.1.100)" Type="Variable" Display="always" Required="true" Mask="false"/>
   <Config Name="iDRAC Username" Target="IDRAC_USERNAME" Default="root" Mode="" Description="iDRAC username" Type="Variable" Display="always" Required="true" Mask="false">root</Config>
   <Config Name="iDRAC Password" Target="IDRAC_PASSWORD" Default="" Mode="" Description="iDRAC password" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="API Token" Target="API_TOKEN" Default="" Mode="" Description="Bearer token required to change fan speed / send hints via the API. Leave blank to allow control only from the local host (loopback). Set a value to control from other LAN hosts." Type="Variable" Display="always" Required="false" Mask="true"/>
   <Config Name="Enable GPU Monitoring" Target="GPU_ENABLED" Default="true" Mode="" Description="Enable NVIDIA GPU temperature monitoring" Type="Variable" Display="always" Required="false" Mask="false">true</Config>
   <Config Name="Idle Fan Speed" Target="FAN_IDLE_SPEED" Default="20" Mode="" Description="Base fan speed when temps are below thresholds (%)" Type="Variable" Display="always" Required="false" Mask="false">20</Config>
   <Config Name="CPU Threshold" Target="FAN_CPU_THRESHOLD" Default="65" Mode="" Description="Increase fans when CPU exceeds this temp (°C)" Type="Variable" Display="always" Required="false" Mask="false">65</Config>

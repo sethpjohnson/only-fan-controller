@@ -69,6 +69,11 @@ type FanControlConfig struct {
 type APIConfig struct {
 	Host string `yaml:"host"`
 	Port int    `yaml:"port"`
+	// Token is the bearer token required on mutating API endpoints
+	// (override/hint create+delete). When empty, mutating endpoints are only
+	// accepted from loopback and a startup warning is logged. It is never
+	// exposed by /api/config. Env override: API_TOKEN.
+	Token string `yaml:"token" json:"-"`
 }
 
 type DashboardConfig struct {
