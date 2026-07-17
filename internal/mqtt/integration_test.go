@@ -2,6 +2,7 @@ package mqtt
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -163,6 +164,56 @@ func TestIntegrationRetainedCommandIsDropped(t *testing.T) {
 		defer consumer.mu.Unlock()
 		return consumer.overrideSet && consumer.overrideSpeed == 71
 	})
+}
+
+// TestIntegrationGPUDiscoveryAppearsAfterFirstRead reproduces the live-hardware
+// cold-start bug against a real broker: MQTT connects before the first GPU read
+// (no devices at connect), so per-GPU discovery must NOT be published at connect,
+// but MUST appear on a later tick once the devices are known.
+func TestIntegrationGPUDiscoveryAppearsAfterFirstRead(t *testing.T) {
+	addr := freeAddr(t)
+	startBroker(t, addr)
+	broker := "tcp://" + addr
+
+	obs := newObserver(t, broker)
+
+	cfg := config.Default()
+	cfg.MQTT.Enabled = true
+	cfg.MQTT.Broker = broker
+	cfg.Monitoring.Interval = 1
+	// Connect-before-first-read: GPU is nil at startup.
+	consumer := &fakeConsumer{status: &controller.Status{CPU: &monitor.CPUReading{Max: 50}}}
+
+	bridge := New(cfg, consumer, NewPahoClient)
+	bridge.Start()
+	t.Cleanup(func() { bridge.Stop() })
+
+	// Wait until the bridge is connected (availability online).
+	waitFor(t, "availability online", func() bool {
+		return obs.seen("only-fan-controller/availability", "online")
+	})
+	// The aggregate discovery is present, but NO per-GPU discovery yet.
+	waitFor(t, "aggregate gpu_temp discovery", func() bool {
+		_, ok := obs.latest("homeassistant/sensor/only-fan-controller/gpu_temp/config")
+		return ok
+	})
+	if _, ok := obs.latest("homeassistant/sensor/only-fan-controller/gpu0_temp/config"); ok {
+		t.Fatal("per-GPU discovery published at connect, before the first GPU read")
+	}
+
+	// The first GPU read completes: two cards appear.
+	consumer.setStatus(gpuStatus(2))
+
+	// Within a tick or two, all three sensors for both cards must be announced.
+	for i := 0; i < 2; i++ {
+		for _, suffix := range []string{"temp", "utilization", "power"} {
+			topic := fmt.Sprintf("homeassistant/sensor/only-fan-controller/gpu%d_%s/config", i, suffix)
+			waitFor(t, "per-GPU discovery "+topic, func() bool {
+				_, ok := obs.latest(topic)
+				return ok
+			})
+		}
+	}
 }
 
 func TestIntegrationConnectDiscoveryCommandStateLWT(t *testing.T) {

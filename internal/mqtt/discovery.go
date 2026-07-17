@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+
+	"github.com/sethpjohnson/only-fan-controller/internal/monitor"
 )
 
 // discoveryEntity is a single retained HA MQTT Discovery config message.
@@ -59,6 +61,24 @@ func (b *Bridge) sensorConfig(objectID, name, valueKey, deviceClass, unit, icon 
 	return e
 }
 
+// gpuSensorConfig builds a per-card GPU sensor bound to a value_json expression.
+// Unlike sensorConfig, the value_template wraps the expression in a `default('')`
+// filter so it renders cleanly (rather than erroring) during the brief window
+// after (re)connect where discovery is published but no state has landed yet, or
+// if the indexed device is momentarily absent from the gpus array.
+func (b *Bridge) gpuSensorConfig(objectID, name, valueExpr, deviceClass, unit string) map[string]any {
+	e := b.baseEntity(objectID, name)
+	e["state_topic"] = b.stateTopic()
+	e["value_template"] = "{{ " + valueExpr + " | default('') }}"
+	if deviceClass != "" {
+		e["device_class"] = deviceClass
+	}
+	if unit != "" {
+		e["unit_of_measurement"] = unit
+	}
+	return e
+}
+
 // binarySensorConfig builds an ON/OFF binary sensor from a boolean value_json
 // key, using device_class "problem" (HA shows red when true).
 func (b *Bridge) binarySensorConfig(objectID, name, valueKey string) map[string]any {
@@ -99,17 +119,19 @@ func (b *Bridge) buttonConfig() map[string]any {
 	return e
 }
 
+// discoverySpec is one HA discovery config message before it is marshaled.
+type discoverySpec struct {
+	component string
+	objectID  string
+	config    map[string]any
+}
+
 // discoveryEntities returns every HA discovery config message. Marshal failures
 // (not expected for these primitive maps) are logged and skipped.
 func (b *Bridge) discoveryEntities() []discoveryEntity {
-	type spec struct {
-		component string
-		objectID  string
-		config    map[string]any
-	}
-	specs := []spec{
+	specs := []discoverySpec{
 		{"sensor", "cpu_temp", b.sensorConfig("cpu_temp", "CPU Temperature", "cpu_temp", "temperature", "°C", "")},
-		{"sensor", "gpu_temp", b.sensorConfig("gpu_temp", "GPU Temperature", "gpu_temp", "temperature", "°C", "")},
+		{"sensor", "gpu_temp", b.sensorConfig("gpu_temp", "GPU Temperature (Max)", "gpu_temp", "temperature", "°C", "")},
 		{"sensor", "fan_speed", b.sensorConfig("fan_speed", "Fan Speed", "fan_speed", "", "%", "mdi:fan")},
 		{"sensor", "target_speed", b.sensorConfig("target_speed", "Target Fan Speed", "target_speed", "", "%", "mdi:fan")},
 		{"sensor", "zone", b.sensorConfig("zone", "Thermal Zone", "zone", "", "", "mdi:thermometer")},
@@ -133,6 +155,33 @@ func (b *Bridge) discoveryEntities() []discoveryEntity {
 		})
 	}
 	return entities
+}
+
+// gpuDeviceSpecs builds the three discovery sensors (temperature, utilization,
+// power) for a single GPU device.
+//
+// arrayIndex is the device's position in the state `gpus` array (what the
+// value_templates index into, matching the order buildStatePayload appends
+// devices); d.Index keys the stable object_ids/unique_ids (gpu0_temp,
+// gpu1_temp, ...) so entities survive restarts and preserve HA history. All
+// per-card sensors share the one HA device block and availability topic used by
+// every other entity.
+func (b *Bridge) gpuDeviceSpecs(arrayIndex int, d monitor.GPUDevice) []discoverySpec {
+	tempID := fmt.Sprintf("gpu%d_temp", d.Index)
+	utilID := fmt.Sprintf("gpu%d_utilization", d.Index)
+	powerID := fmt.Sprintf("gpu%d_power", d.Index)
+	label := fmt.Sprintf("GPU %d (%s)", d.Index, d.Name)
+	return []discoverySpec{
+		{"sensor", tempID, b.gpuSensorConfig(
+			tempID, label+" Temperature",
+			fmt.Sprintf("value_json.gpus[%d].temp", arrayIndex), "temperature", "°C")},
+		{"sensor", utilID, b.gpuSensorConfig(
+			utilID, label+" Utilization",
+			fmt.Sprintf("value_json.gpus[%d].utilization", arrayIndex), "", "%")},
+		{"sensor", powerID, b.gpuSensorConfig(
+			powerID, label+" Power",
+			fmt.Sprintf("value_json.gpus[%d].power", arrayIndex), "power", "W")},
+	}
 }
 
 // publishDiscovery publishes all discovery config messages, retained.
