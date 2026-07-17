@@ -1,10 +1,76 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestMQTTValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(c *Config)
+		wantErr bool
+	}{
+		{
+			name:    "disabled needs no broker",
+			mutate:  func(c *Config) { c.MQTT.Enabled = false; c.MQTT.Broker = "" },
+			wantErr: false,
+		},
+		{
+			name:    "enabled with valid tcp broker is ok",
+			mutate:  func(c *Config) { c.MQTT.Enabled = true; c.MQTT.Broker = "tcp://192.168.1.5:1883" },
+			wantErr: false,
+		},
+		{
+			name:    "enabled with empty broker is rejected",
+			mutate:  func(c *Config) { c.MQTT.Enabled = true; c.MQTT.Broker = "" },
+			wantErr: true,
+		},
+		{
+			name:    "enabled with unparseable broker is rejected",
+			mutate:  func(c *Config) { c.MQTT.Enabled = true; c.MQTT.Broker = "://nope" },
+			wantErr: true,
+		},
+		{
+			name:    "enabled with schemeless broker is rejected",
+			mutate:  func(c *Config) { c.MQTT.Enabled = true; c.MQTT.Broker = "192.168.1.5:1883" },
+			wantErr: true,
+		},
+		{
+			name:    "enabled with blank client_id is rejected",
+			mutate:  func(c *Config) { c.MQTT.Enabled = true; c.MQTT.Broker = "tcp://h:1883"; c.MQTT.ClientID = "" },
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Default()
+			tt.mutate(c)
+			err := c.Validate()
+			if tt.wantErr && err == nil {
+				t.Fatal("expected validation error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	}
+}
+
+func TestMQTTPasswordNotMarshaled(t *testing.T) {
+	c := Default()
+	c.MQTT.Password = "s3cr3t-broker-pw"
+	b, err := json.Marshal(c.MQTT)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+	if strings.Contains(string(b), "s3cr3t-broker-pw") {
+		t.Fatalf("mqtt password leaked into JSON: %s", b)
+	}
+}
 
 // TestExampleConfigIsValid loads config.example.yaml verbatim (as a fresh
 // install would) and confirms it passes Validate(), so the shipped example

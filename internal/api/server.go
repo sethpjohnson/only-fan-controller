@@ -8,52 +8,16 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/sethpjohnson/only-fan-controller/internal/config"
 	"github.com/sethpjohnson/only-fan-controller/internal/controller"
 	"github.com/sethpjohnson/only-fan-controller/internal/storage"
+	"github.com/sethpjohnson/only-fan-controller/internal/validate"
 )
-
-// maxHintFieldLen bounds free-form hint identifiers (source/type). Kept small:
-// these are process names, not prose.
-const maxHintFieldLen = 64
-
-// hintFieldPattern is the allowed charset for hint source/type. Restricting to
-// this set means no server-derived hint string can carry HTML/script even if a
-// dashboard interpolation is ever missed.
-var hintFieldPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
-
-// allowedIntensities is the closed set of intensity values AddHint understands.
-var allowedIntensities = map[string]bool{"": true, "low": true, "medium": true, "high": true}
-
-// allowedHintActions is the closed set of hint actions the controller acts on.
-var allowedHintActions = map[string]bool{"start": true, "stop": true}
-
-// maxOverrideReasonLen bounds the free-text override reason.
-const maxOverrideReasonLen = 128
-
-// validateOverrideReason enforces a length cap and rejects control characters
-// on the override reason. Unlike hint source/type, this is human-readable
-// prose (shown to an operator, not interpolated as an identifier), so normal
-// punctuation, spaces, and quotes are all valid free text -- only control
-// characters and excessive length are rejected.
-func validateOverrideReason(reason string) error {
-	if len(reason) > maxOverrideReasonLen {
-		return fmt.Errorf("reason exceeds %d characters", maxOverrideReasonLen)
-	}
-	for _, r := range reason {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("reason must not contain control characters")
-		}
-	}
-	return nil
-}
 
 //go:embed static/*
 var staticFiles embed.FS
@@ -199,33 +163,23 @@ func bearerTokenMatches(header, expected string) bool {
 }
 
 // validateHintRequest enforces length, charset, and closed-set bounds on the
-// client-controlled hint fields before they are stored or echoed back. This is
-// the server-side half of the XSS defense (the dashboard escapes on render).
+// client-controlled hint fields before they are stored or echoed back, using the
+// shared validate package so the HTTP and MQTT surfaces agree.
 func validateHintRequest(req *HintRequest) error {
-	if err := validateHintField("source", req.Source); err != nil {
+	if err := validate.HintField("source", req.Source); err != nil {
 		return err
 	}
-	if err := validateHintField("type", req.Type); err != nil {
+	if err := validate.HintField("type", req.Type); err != nil {
 		return err
 	}
-	if !allowedHintActions[req.Action] {
-		return fmt.Errorf("action must be one of start, stop")
+	if err := validate.HintAction(req.Action); err != nil {
+		return err
 	}
-	if !allowedIntensities[req.Intensity] {
-		return fmt.Errorf("intensity must be one of low, medium, high")
+	if err := validate.Intensity(req.Intensity); err != nil {
+		return err
 	}
 	if req.DurationEstimate < 0 {
 		return fmt.Errorf("duration_estimate must not be negative")
-	}
-	return nil
-}
-
-func validateHintField(name, value string) error {
-	if len(value) > maxHintFieldLen {
-		return fmt.Errorf("%s exceeds %d characters", name, maxHintFieldLen)
-	}
-	if !hintFieldPattern.MatchString(value) {
-		return fmt.Errorf("%s must match [A-Za-z0-9_.-]", name)
 	}
 	return nil
 }
@@ -306,12 +260,12 @@ func (s *Server) handleOverride(c *gin.Context) {
 		return
 	}
 
-	if req.Speed < 0 || req.Speed > 100 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "speed must be 0-100"})
+	if err := validate.OverrideSpeed(req.Speed); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := validateOverrideReason(req.Reason); err != nil {
+	if err := validate.OverrideReason(req.Reason); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

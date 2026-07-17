@@ -17,6 +17,7 @@ import (
 	"github.com/sethpjohnson/only-fan-controller/internal/config"
 	"github.com/sethpjohnson/only-fan-controller/internal/controller"
 	"github.com/sethpjohnson/only-fan-controller/internal/monitor"
+	"github.com/sethpjohnson/only-fan-controller/internal/mqtt"
 	"github.com/sethpjohnson/only-fan-controller/internal/storage"
 )
 
@@ -93,6 +94,20 @@ func applyEnvOverrides(cfg *config.Config) {
 	if v := os.Getenv("API_TOKEN"); v != "" {
 		cfg.API.Token = v
 	}
+
+	// MQTT / Home Assistant bridge
+	if v := os.Getenv("MQTT_ENABLED"); v != "" {
+		cfg.MQTT.Enabled = strings.ToLower(v) == "true" || v == "1"
+	}
+	if v := os.Getenv("MQTT_BROKER"); v != "" {
+		cfg.MQTT.Broker = v
+	}
+	if v := os.Getenv("MQTT_USERNAME"); v != "" {
+		cfg.MQTT.Username = v
+	}
+	if v := os.Getenv("MQTT_PASSWORD"); v != "" {
+		cfg.MQTT.Password = v
+	}
 }
 
 func main() {
@@ -133,6 +148,11 @@ func restoreOnce(restore func() error) func() error {
 // cleanup goroutine to stop. Thermal safety (restore()) always runs before
 // this wait starts, so a hung Cleanup query must not stall process exit.
 const cleanupShutdownTimeout = 5 * time.Second
+
+// mqttShutdownTimeout bounds how long shutdown waits for the MQTT bridge to
+// publish offline + disconnect. Thermal safety (restore()) always runs before
+// this, so a wedged broker must never stall process exit.
+const mqttShutdownTimeout = 3 * time.Second
 
 // runHistoryCleanup prunes readings older than retention on a fixed daily
 // interval until stopCh is closed. The initial cleanup (so a fresh start
@@ -273,6 +293,17 @@ func run() int {
 	log.Printf("API server listening on %s:%d", cfg.API.Host, cfg.API.Port)
 	log.Printf("Dashboard: http://localhost:%d/dashboard/", cfg.API.Port)
 
+	// Optional MQTT / Home Assistant bridge. Off unless mqtt.enabled. It talks to
+	// the controller only through the exported Consumer methods (the same ones the
+	// HTTP handlers use), so a hung/unreachable broker can never stall fan control.
+	// fanCtrl is a *controller.FanController in both real and demo mode, so the
+	// bridge (and thus HA) works in demo mode too.
+	var mqttBridge *mqtt.Bridge
+	if cfg.MQTT.Enabled {
+		mqttBridge = mqtt.New(cfg, fanCtrl, mqtt.NewPahoClient)
+		mqttBridge.Start()
+	}
+
 	// Wait for a shutdown signal or a fatal error.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -292,6 +323,21 @@ func run() int {
 	// choke point that keeps the machine cooled once we leave manual mode.
 	if err := restore(); err != nil {
 		log.Printf("Warning: Failed to restore auto fan mode: %v", err)
+	}
+
+	// Tear down the MQTT bridge AFTER the BMC hand-back choke point, bounded so a
+	// wedged broker cannot delay exit. Mirrors the history-cleanup shutdown pattern.
+	if mqttBridge != nil {
+		stopped := make(chan struct{})
+		go func() {
+			mqttBridge.Stop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(mqttShutdownTimeout):
+			log.Printf("Warning: MQTT bridge did not stop within %s; abandoning it", mqttShutdownTimeout)
+		}
 	}
 
 	// Stop the history cleanup goroutine before the deferred store.Close() runs.

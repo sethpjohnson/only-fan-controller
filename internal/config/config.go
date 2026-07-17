@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -16,6 +17,21 @@ type Config struct {
 	API        APIConfig        `yaml:"api"`
 	Dashboard  DashboardConfig  `yaml:"dashboard"`
 	Storage    StorageConfig    `yaml:"storage"`
+	MQTT       MQTTConfig       `yaml:"mqtt"`
+}
+
+// MQTTConfig configures the optional Home Assistant MQTT bridge. It is off by
+// default; when Enabled, Broker is required and validated. Password carries
+// json:"-" so it is never exposed via /api/config (same treatment as the iDRAC
+// password and API token).
+type MQTTConfig struct {
+	Enabled         bool   `yaml:"enabled" json:"enabled"`
+	Broker          string `yaml:"broker" json:"broker"`
+	Username        string `yaml:"username" json:"username"`
+	Password        string `yaml:"password" json:"-"`
+	ClientID        string `yaml:"client_id" json:"client_id"`
+	BaseTopic       string `yaml:"base_topic" json:"base_topic"`
+	DiscoveryPrefix string `yaml:"discovery_prefix" json:"discovery_prefix"`
 }
 
 type IDRACConfig struct {
@@ -174,6 +190,30 @@ func (c *Config) Validate() error {
 	if c.Storage.RetentionDays <= 0 {
 		return fmt.Errorf("invalid storage.retention_days: %d (require > 0)", c.Storage.RetentionDays)
 	}
+	// MQTT is optional. When enabled, the broker must be a parseable URL with a
+	// scheme and host, and the identity/topic roots must be non-empty (they
+	// default to non-empty values, so this only trips if an operator blanks
+	// them). When disabled, none of this is checked.
+	if c.MQTT.Enabled {
+		if c.MQTT.Broker == "" {
+			return fmt.Errorf("mqtt.enabled is true but mqtt.broker is empty")
+		}
+		u, err := url.Parse(c.MQTT.Broker)
+		if err != nil {
+			return fmt.Errorf("invalid mqtt.broker %q: %v", c.MQTT.Broker, err)
+		}
+		switch u.Scheme {
+		case "tcp", "ssl", "ws", "wss", "mqtt", "mqtts":
+		default:
+			return fmt.Errorf("invalid mqtt.broker %q: scheme must be one of tcp/ssl/ws/wss/mqtt/mqtts", c.MQTT.Broker)
+		}
+		if u.Host == "" {
+			return fmt.Errorf("invalid mqtt.broker %q: missing host", c.MQTT.Broker)
+		}
+		if c.MQTT.ClientID == "" || c.MQTT.BaseTopic == "" || c.MQTT.DiscoveryPrefix == "" {
+			return fmt.Errorf("mqtt.client_id, mqtt.base_topic and mqtt.discovery_prefix must be non-empty when mqtt is enabled")
+		}
+	}
 	return nil
 }
 
@@ -227,6 +267,12 @@ func Default() *Config {
 		Storage: StorageConfig{
 			Path:          "/var/lib/only-fan-controller/history.db",
 			RetentionDays: 30,
+		},
+		MQTT: MQTTConfig{
+			Enabled:         false,
+			ClientID:        "only-fan-controller",
+			BaseTopic:       "only-fan-controller",
+			DiscoveryPrefix: "homeassistant",
 		},
 	}
 }

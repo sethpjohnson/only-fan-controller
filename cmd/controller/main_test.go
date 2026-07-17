@@ -6,7 +6,29 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/sethpjohnson/only-fan-controller/internal/config"
 )
+
+func TestApplyEnvOverridesMQTT(t *testing.T) {
+	t.Setenv("MQTT_ENABLED", "true")
+	t.Setenv("MQTT_BROKER", "tcp://10.0.0.9:1883")
+	t.Setenv("MQTT_USERNAME", "ha")
+	t.Setenv("MQTT_PASSWORD", "brokerpw")
+
+	cfg := config.Default()
+	applyEnvOverrides(cfg)
+
+	if !cfg.MQTT.Enabled {
+		t.Fatal("MQTT_ENABLED=true should enable mqtt")
+	}
+	if cfg.MQTT.Broker != "tcp://10.0.0.9:1883" {
+		t.Fatalf("broker override not applied: %q", cfg.MQTT.Broker)
+	}
+	if cfg.MQTT.Username != "ha" || cfg.MQTT.Password != "brokerpw" {
+		t.Fatalf("credentials override not applied: %q / %q", cfg.MQTT.Username, cfg.MQTT.Password)
+	}
+}
 
 func TestResolveConfigMissingFileFallsBackToDefaults(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist.yaml")
