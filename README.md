@@ -62,6 +62,50 @@ Shows:
 - Temperature history graph with threshold lines
 - Active workload hints
 
+## Safety
+
+While running, this controller puts the iDRAC into **manual fan mode** via raw
+IPMI OEM commands and is the **sole thing standing between your hardware and
+the BMC's fans idling**. It is designed so that as many failure modes as
+possible fail toward "the BMC keeps cooling the box," not toward "the fans
+stay wherever they were and the machine cooks":
+
+- **Abnormal exit restores auto mode.** SIGINT/SIGTERM, a fatal API server
+  error, and even a panic in the control loop all go through the same
+  shutdown path, which calls `RestoreAutoMode` before the process exits. A
+  config that exists but fails safety validation makes the process refuse to
+  start at all (see [Upgrading](#upgrading)) rather than run with unsafe
+  defaults — since manual mode is never enabled in that case, the BMC simply
+  keeps its own automatic control.
+- **Sensor loss fails up, not down.** A failed temperature read is never
+  treated as 0°C (which would ramp fans down). The controller holds the last
+  fan speed and, after `sensor_failure_limit` consecutive failures, hands
+  cooling back to BMC auto mode. This is recoverable: once sensor reads
+  succeed again, manual control is reclaimed automatically.
+- **Fan-write failure is a sticky fail-safe.** After `write_failure_limit`
+  consecutive failures to *write* a fan speed, control is handed back to BMC
+  auto mode and stays there until the process restarts — the controller does
+  not probe the write channel again mid-run, since that would flap the BMC
+  between manual and auto.
+- **Restore is retried until confirmed.** If the `RestoreAutoMode` call itself
+  fails (e.g. the BMC is unreachable), the controller keeps retrying on every
+  control-loop tick until it succeeds; `restore_pending` in `/api/status`
+  reflects this. Nothing re-enables manual mode while a restore is
+  unconfirmed.
+- **Critical temperatures bypass everything.** If `critical_cpu_temp` or
+  `critical_gpu_temp` is reached, fans jump straight to `max_speed`,
+  bypassing step ramping and any active manual override.
+
+**What this does *not* protect against:** a `SIGKILL` (`kill -9`) or a power
+loss bypasses the shutdown path entirely and cannot trigger a restore — the
+BMC's own thermal protections are the last line of defense in that case, same
+as on any other server. This controller is a cooling *policy* on top of the
+BMC, not a replacement for its built-in safety logic.
+
+Also note that the raw IPMI commands used here (`ipmitool raw 0x30 0x30 ...`)
+are **Dell iDRAC-specific OEM commands** — they are not portable to other
+vendors' BMCs.
+
 ## API Security
 
 The API binds `0.0.0.0` by default (required for container/bridge networking), so
@@ -124,9 +168,23 @@ Returns current system state including thresholds:
   "zone": "idle",
   "cpu_threshold": 65,
   "gpu_threshold": 60,
-  "idle_speed": 20
+  "idle_speed": 20,
+  "failsafe_active": false,
+  "failsafe_reason": "none",
+  "restore_pending": false,
+  "last_write_failed": false
 }
 ```
+
+The fail-safe fields (see [Safety](#safety) above):
+
+- `failsafe_active` — `true` once cooling has been handed back to BMC auto
+  mode (sensor loss or repeated fan-write failures).
+- `failsafe_reason` — `"none"`, `"sensor-loss"`, or `"write-failure"`.
+- `restore_pending` — `true` if fail-safe is active but the hand-back to BMC
+  auto mode has not yet been confirmed (the BMC may still be in manual mode);
+  the controller keeps retrying until this clears.
+- `last_write_failed` — `true` if the most recent fan-speed write failed.
 
 ### POST /api/hint
 
@@ -180,6 +238,11 @@ Get temperature/fan history for graphing.
 
 See [config.example.yaml](config.example.yaml) for all options.
 
+**Logging**: the controller logs to stderr only — there is no `logging.level`
+or `logging.file` config. Under Docker, use `docker logs` and your Docker log
+driver's rotation settings (e.g. `json-file` with `max-size`/`max-file`) to
+capture and rotate logs.
+
 ### Key Settings
 
 ```yaml
@@ -189,6 +252,17 @@ fan_control:
   gpu_threshold: 60          # Increase fans when GPU exceeds this (°C)
   step_size: 10              # Fan increase per 5°C over threshold (%)
   cooldown_delay: 60         # Seconds below threshold before ramping down
+  # Emergency ramp trigger — required, must exceed the (effective) threshold
+  # above it or the service refuses to start. See Safety and Upgrading above.
+  critical_cpu_temp: 85
+  critical_gpu_temp: 90
+  # Fail-safe: consecutive failures before handing cooling back to BMC auto.
+  sensor_failure_limit: 3
+  write_failure_limit: 3
+
+storage:
+  path: "/var/lib/only-fan-controller/history.db"
+  retention_days: 30         # History readings older than this are pruned daily
 ```
 
 ### Example: Quiet Home Server
@@ -260,6 +334,37 @@ All config options can be overridden via environment variables:
 1. Copy `unraid/only-fan-controller.xml` to `/boot/config/plugins/dockerMan/templates-user/`
 2. Configure via the Unraid Docker UI
 3. Or use Community Applications (search "Only Fan Controller")
+
+## Upgrading
+
+**smart-fan-controller → only-fan-controller rename.** The project (and the
+Docker image) were renamed from `smart-fan-controller` to
+`only-fan-controller`. If you have an existing deployment:
+
+- The container name changed from `smart-fan-controller` to
+  `only-fan-controller` — update any `docker stop`/`docker logs`/etc. scripts
+  that reference the old name.
+- The GHCR image path changed accordingly (`ghcr.io/<owner>/only-fan-controller`
+  instead of `.../smart-fan-controller`); update your `docker-compose.yml` /
+  `docker run` image reference.
+- `scripts/hint-client.sh` now reads `FAN_URL` instead of `SMART_FAN_URL` for
+  the controller base URL, but still honors `SMART_FAN_URL` as a fallback if
+  set — no forced script changes.
+
+**Config validation now refuses to start on unsafe configs.** If your config
+sets `cpu_threshold` (or `gpu_threshold`) at or above the corresponding
+critical temperature's default — most notably `cpu_threshold >= 85` without
+also setting `critical_cpu_temp` explicitly above it — the service now exits
+at startup with a clear error instead of silently falling back to default
+thresholds. Set `critical_cpu_temp`/`critical_gpu_temp` explicitly, above your
+configured thresholds, to fix this.
+
+**API token auth is a config-only addition.** Existing deployments keep
+working unchanged; see [API Security](#api-security) above.
+
+**History retention now defaults to 30 days.** The `readings` table is
+pruned automatically (see `storage.retention_days` in
+[config.example.yaml](config.example.yaml)); previously it grew unbounded.
 
 ## Requirements
 

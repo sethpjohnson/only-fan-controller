@@ -9,6 +9,10 @@
 .vscode/
 *.swp
 *.swo
+*.sketch
+
+# dex task state
+.dex/
 
 # OS
 .DS_Store

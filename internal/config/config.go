@@ -16,7 +16,6 @@ type Config struct {
 	API        APIConfig        `yaml:"api"`
 	Dashboard  DashboardConfig  `yaml:"dashboard"`
 	Storage    StorageConfig    `yaml:"storage"`
-	Logging    LoggingConfig    `yaml:"logging"`
 }
 
 type IDRACConfig struct {
@@ -83,11 +82,9 @@ type DashboardConfig struct {
 
 type StorageConfig struct {
 	Path string `yaml:"path"`
-}
-
-type LoggingConfig struct {
-	Level string `yaml:"level"`
-	File  string `yaml:"file"`
+	// RetentionDays is how long history readings are kept before being pruned.
+	// Cleanup runs once at startup and then daily. Must be > 0.
+	RetentionDays int `yaml:"retention_days"`
 }
 
 // Default normal-ramp thresholds, applied when the corresponding config field is
@@ -174,6 +171,9 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("zones must be monotonic non-decreasing; zone %q breaks ordering", cur.Name)
 		}
 	}
+	if c.Storage.RetentionDays <= 0 {
+		return fmt.Errorf("invalid storage.retention_days: %d (require > 0)", c.Storage.RetentionDays)
+	}
 	return nil
 }
 
@@ -225,11 +225,8 @@ func Default() *Config {
 			Port:    8086,
 		},
 		Storage: StorageConfig{
-			Path: "/var/lib/only-fan-controller/history.db",
-		},
-		Logging: LoggingConfig{
-			Level: "info",
-			File:  "/var/log/only-fan-controller.log",
+			Path:          "/var/lib/only-fan-controller/history.db",
+			RetentionDays: 30,
 		},
 	}
 }

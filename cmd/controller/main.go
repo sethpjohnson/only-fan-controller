@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/sethpjohnson/only-fan-controller/internal/api"
 	"github.com/sethpjohnson/only-fan-controller/internal/config"
@@ -128,6 +129,39 @@ func restoreOnce(restore func() error) func() error {
 	}
 }
 
+// cleanupShutdownTimeout bounds how long shutdown waits for the history
+// cleanup goroutine to stop. Thermal safety (restore()) always runs before
+// this wait starts, so a hung Cleanup query must not stall process exit.
+const cleanupShutdownTimeout = 5 * time.Second
+
+// runHistoryCleanup prunes readings older than retention on a fixed daily
+// interval until stopCh is closed. The initial cleanup (so a fresh start
+// doesn't wait a full day before its first prune) is run by the caller before
+// this goroutine is started; this loop only handles the recurring runs.
+func runHistoryCleanup(store *storage.Store, retention time.Duration, retentionDays int, stopCh <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			logCleanupResult(store, retention, retentionDays)
+		case <-stopCh:
+			return
+		}
+	}
+}
+
+// logCleanupResult runs a single history cleanup pass and logs the outcome.
+func logCleanupResult(store *storage.Store, retention time.Duration, retentionDays int) {
+	deleted, err := store.Cleanup(retention)
+	if err != nil {
+		log.Printf("History cleanup failed: %v", err)
+		return
+	}
+	log.Printf("History cleanup: removed %d old reading(s) (retention %d days)", deleted, retentionDays)
+}
+
 // resolveConfig loads the config, distinguishing a genuinely absent file (safe
 // to fall back to defaults + env overrides) from a present-but-invalid file
 // (parse or safety-validation failure). For the latter we REFUSE to start rather
@@ -189,6 +223,17 @@ func run() int {
 	}
 	defer store.Close()
 
+	// Prune history once at startup, then keep pruning daily for as long as the
+	// process runs. This is not on the safety-critical restore path, so its
+	// goroutine is stopped (via cleanupStop/cleanupDone) before the deferred
+	// store.Close() above runs, but is otherwise independent of the
+	// control-loop/API shutdown below.
+	retention := time.Duration(cfg.Storage.RetentionDays) * 24 * time.Hour
+	logCleanupResult(store, retention, cfg.Storage.RetentionDays)
+	cleanupStop := make(chan struct{})
+	cleanupDone := make(chan struct{})
+	go runHistoryCleanup(store, retention, cfg.Storage.RetentionDays, cleanupStop, cleanupDone)
+
 	// errCh carries any fatal error (API server failure, control-loop panic)
 	// back to the shutdown path so cleanup + auto-mode restore always run.
 	errCh := make(chan error, 1)
@@ -247,6 +292,20 @@ func run() int {
 	// choke point that keeps the machine cooled once we leave manual mode.
 	if err := restore(); err != nil {
 		log.Printf("Warning: Failed to restore auto fan mode: %v", err)
+	}
+
+	// Stop the history cleanup goroutine before the deferred store.Close() runs.
+	// Bounded: if a Cleanup query happens to be in flight, don't let it stall
+	// exit indefinitely (thermal safety already happened above, in restore()).
+	close(cleanupStop)
+	select {
+	case <-cleanupDone:
+	case <-time.After(cleanupShutdownTimeout):
+		// Abandoning it is safe: an in-flight Cleanup Exec racing the deferred
+		// store.Close() is benign — database/sql won't force-interrupt a
+		// checked-out connection, an interrupted DELETE rolls back via SQLite's
+		// journal, and the process exits immediately after this anyway.
+		log.Printf("Warning: history cleanup goroutine did not stop within %s; abandoning it", cleanupShutdownTimeout)
 	}
 
 	log.Println("Shutdown complete")
