@@ -1,6 +1,51 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// TestExampleConfigIsValid loads config.example.yaml verbatim (as a fresh
+// install would) and confirms it passes Validate(), so the shipped example
+// never silently bit-rots into a config the service refuses to start with.
+func TestExampleConfigIsValid(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "config.example.yaml"))
+	if err != nil {
+		t.Fatalf("config.example.yaml failed to load/validate: %v", err)
+	}
+	if cfg.Storage.RetentionDays <= 0 {
+		t.Fatalf("expected a positive retention_days, got %d", cfg.Storage.RetentionDays)
+	}
+}
+
+// TestLegacyLoggingSectionIsIgnored confirms that removing the logging config
+// struct doesn't break loading of older config files that still have a
+// (now-unused) `logging:` section: yaml.v3 ignores unknown keys, so this
+// should parse fine and fall back to defaults for everything else.
+func TestLegacyLoggingSectionIsIgnored(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-config.yaml")
+	content := `idrac:
+  host: "local"
+fan_control:
+  critical_cpu_temp: 85
+  critical_gpu_temp: 90
+logging:
+  level: "debug"
+  file: "/var/log/foo.log"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("failed to write temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("legacy config with a logging: section should still load, got: %v", err)
+	}
+	if cfg.Storage.RetentionDays != 30 {
+		t.Fatalf("expected default retention_days=30, got %d", cfg.Storage.RetentionDays)
+	}
+}
 
 func TestValidate(t *testing.T) {
 	tests := []struct {

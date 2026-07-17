@@ -25,6 +25,18 @@ fan_control:
   gpu_threshold: 60          # Bump fans when GPU exceeds this (°C)
   step_size: 10              # Fan speed increment per 5°C over threshold (%)
   cooldown_delay: 60         # Seconds below threshold before ramping down
+  # Critical temperatures force an emergency ramp straight to max_speed,
+  # bypassing step ramping and any manual override. Required, and must be
+  # greater than the (effective) threshold above it — the service refuses to
+  # start otherwise rather than silently falling back to defaults. If you
+  # raise cpu_threshold/gpu_threshold, raise these too.
+  critical_cpu_temp: 85      # Emergency ramp at/above this CPU temp (°C)
+  critical_gpu_temp: 90      # Emergency ramp at/above this GPU temp (°C)
+  # Fail-safe thresholds: after this many consecutive failures, cooling is
+  # handed back to the BMC's automatic fan control until reads/writes succeed
+  # again. See the README's Safety section for the full fail-safe design.
+  sensor_failure_limit: 3    # Consecutive sensor read failures before restoring auto mode
+  write_failure_limit: 3     # Consecutive fan-write failures before restoring auto mode
 
 api:
   # host 0.0.0.0 binds every interface — REQUIRED for container/bridge
@@ -51,7 +63,10 @@ dashboard:
 
 storage:
   path: "/var/lib/only-fan-controller/history.db"
+  # How long history readings are kept before being pruned. Cleanup runs once
+  # at startup and then once a day. Must be > 0.
+  retention_days: 30
 
-logging:
-  level: "info"              # debug, info, warn, error
-  file: "/var/log/only-fan-controller.log"
+# Logs go to stderr; there is no file-logging config. Docker/systemd/your
+# process supervisor is responsible for capturing and rotating them (e.g.
+# `docker logs`, or the json-file/local log driver's rotation options).

@@ -1,5 +1,34 @@
 # iDRAC Smart Fan Controller
 
+> **This is a historical design document, not current documentation.** It
+> describes the original plan and has been superseded by the actual code and
+> [README.md](README.md), which describe what was actually built and is kept
+> up to date. Where this document conflicts with the code, the code wins.
+> See "What was actually built" below for the most significant drift; the
+> rest of this document (decision-engine pseudocode, phase checklists, file
+> layout, etc.) is left as originally written and should be read as design
+> history, not a spec of current behavior.
+
+## What was actually built (vs. this document)
+
+- **API routes are `/api/...`, and there is no `PUT /config`.** e.g.
+  `GET /api/status`, `POST /api/hint`, `POST /api/override`, not the bare
+  `/status`, `/hint`, etc. shown below. Configuration is read-only via
+  `GET /api/config`; there is no endpoint to update it at runtime.
+- **Zone-based fan curves were never the control mechanism.** Fan control is
+  simple threshold + hysteresis (`cpu_threshold`/`gpu_threshold`,
+  `cooldown_delay`), not the zone lookup described in "Temperature Zones &
+  Fan Curves" below. `zones` still exist in config, but only for dashboard
+  display. The emergency ramp added later (`critical_cpu_temp`/
+  `critical_gpu_temp`, see [README.md](README.md#safety)) is a separate,
+  explicitly-validated trigger — it is not part of the zone system either.
+- **Trend calculation is telemetry only.** `cpu_trend`/`gpu_trend` are
+  reported in `/api/status` for visibility, but they do not feed back into
+  the fan-speed decision the way the "Decision Engine Logic" pseudocode below
+  implies.
+- **The dashboard is embedded static HTML served on the same port as the
+  API**, not a separate Vue/Svelte SPA on port 8087. See `internal/api/static/`.
+
 ## Overview
 
 An intelligent fan controller for Dell PowerEdge servers that goes beyond simple threshold-based control. Monitors CPU and GPU temperatures, accepts hints from external applications about upcoming workloads, and makes predictive decisions about fan speeds to maintain optimal cooling while minimizing noise.

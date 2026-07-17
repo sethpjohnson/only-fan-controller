@@ -104,9 +104,22 @@ func (s *Store) GetHistory(duration time.Duration) ([]HistoryPoint, error) {
 	return history, nil
 }
 
-// Cleanup removes old readings beyond retention period
-func (s *Store) Cleanup(retention time.Duration) error {
+// Cleanup removes old readings beyond retention period and returns the number
+// of rows deleted.
+func (s *Store) Cleanup(retention time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-retention)
-	_, err := s.db.Exec("DELETE FROM readings WHERE timestamp < ?", cutoff)
-	return err
+	// Match GetHistory's cutoff formatting: bind a plain UTC "YYYY-MM-DD
+	// HH:MM:SS" string, the same text format the timestamp column's
+	// DATETIME DEFAULT CURRENT_TIMESTAMP writes. Binding a raw time.Time here
+	// instead lets go-sqlite3 serialize it as local time with a numeric
+	// offset and fractional seconds, and SQLite compares timestamps as plain
+	// text — so retention would silently drift by the host's UTC offset.
+	res, err := s.db.Exec(
+		"DELETE FROM readings WHERE timestamp < datetime(?)",
+		cutoff.UTC().Format("2006-01-02 15:04:05"),
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
