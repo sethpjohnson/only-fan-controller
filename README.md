@@ -183,16 +183,34 @@ All entities are grouped under one device, **Only Fan Controller**:
 
 | Entity | Type | Notes |
 |--------|------|-------|
-| CPU Temperature, GPU Temperature | sensor | °C |
+| CPU Temperature | sensor | °C |
+| GPU Temperature (Max) | sensor | °C; hottest card across all GPUs (drives fan logic) |
+| GPU _N_ (_model_) Temperature / Utilization / Power | sensor | one set per detected GPU (°C / % / W) |
 | Fan Speed, Target Fan Speed | sensor | % |
 | Thermal Zone, Failsafe Reason | sensor | text |
 | Failsafe Active, Restore Pending, Last Fan Write Failed | binary_sensor | `problem` class |
 | Override Fan Speed | number | slider bound to `min_speed`/`max_speed`; sends a 1-hour override |
 | Clear Fan Override | button | clears any active override |
 
+**Per-GPU sensors are dynamic in card count.** On a two-GPU box you get two sets
+of Temperature/Utilization/Power sensors, on a three-GPU box three, and so on.
+Each card is announced as soon as the controller's first GPU read completes (a
+few seconds after start — MQTT connects before the sensors are read, so the
+per-card entities appear on the first control tick, not instantly). A GPU added
+later is picked up automatically on the next tick. If the card count *shrinks*,
+the stale per-card entities linger in Home Assistant as *unavailable* until you
+delete them (the controller does not remove discovery entries).
+
 The device is marked **unavailable** the instant the process dies — the broker
 publishes the Last Will (`offline`) on ungraceful disconnect, giving you free
 external monitoring for the fail-safe scenarios.
+
+`broker` is forgiving about format: a bare host, `host:port`, or even a browser
+URL pasted from Home Assistant (`http://ha.local:8123`) is normalized to
+`tcp://host:port` at startup (the interpretation is logged). If the broker turns
+out to be unreachable — e.g. you pointed it at HA's web UI port `8123` instead of
+the MQTT broker's `1883` — the log calls that out explicitly instead of silently
+timing out.
 
 ### Topics
 

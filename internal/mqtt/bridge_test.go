@@ -1,6 +1,11 @@
 package mqtt
 
 import (
+	"bytes"
+	"errors"
+	"log"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -26,6 +31,9 @@ type fakeClient struct {
 	published        []publishedMsg
 	subs             map[string]MessageHandler
 	disconnectCalled bool
+	// publishErr, when non-nil, makes every Publish fail with it (simulating an
+	// unreachable/wedged broker where the paho token times out).
+	publishErr error
 }
 
 func (f *fakeClient) Connect() error {
@@ -39,7 +47,14 @@ func (f *fakeClient) Publish(topic string, qos byte, retained bool, payload []by
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.published = append(f.published, publishedMsg{topic, qos, retained, append([]byte(nil), payload...)})
-	return nil
+	return f.publishErr
+}
+
+// setPublishErr toggles whether subsequent Publish calls fail.
+func (f *fakeClient) setPublishErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.publishErr = err
 }
 
 func (f *fakeClient) Subscribe(topic string, qos byte, h MessageHandler) error {
@@ -118,6 +133,14 @@ func (c *fakeConsumer) GetStatus() *controller.Status {
 	return &controller.Status{}
 }
 
+// setStatus swaps the status returned by GetStatus, simulating the control loop
+// populating GPU devices after the first read.
+func (c *fakeConsumer) setStatus(s *controller.Status) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.status = s
+}
+
 func (c *fakeConsumer) SetOverride(speed int, duration time.Duration, reason string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -182,5 +205,80 @@ func TestStopPublishesOfflineAndDisconnects(t *testing.T) {
 	}
 	if !h.client.disconnectCalled {
 		t.Fatal("Disconnect was not called on Stop")
+	}
+}
+
+// TestStartNormalizesBroker verifies the bridge hands the paho client a
+// normalized broker (bare host -> tcp://host:1883) rather than the raw config
+// value.
+func TestStartNormalizesBroker(t *testing.T) {
+	cfg := testConfig()
+	cfg.MQTT.Broker = "192.168.1.50"
+	h := &clientHolder{}
+	b := New(cfg, &fakeConsumer{}, h.factory)
+	b.Start()
+
+	if h.client.opts.Broker != "tcp://192.168.1.50:1883" {
+		t.Fatalf("client broker = %q, want tcp://192.168.1.50:1883", h.client.opts.Broker)
+	}
+	if b.broker != "tcp://192.168.1.50:1883" {
+		t.Fatalf("bridge broker = %q, want tcp://192.168.1.50:1883", b.broker)
+	}
+}
+
+// TestUnreachableBrokerHintOnce verifies the "unable to reach broker" hint is
+// logged once while publishing keeps failing, then rearms after a success.
+func TestUnreachableBrokerHintOnce(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	})
+
+	h := &clientHolder{}
+	b := New(testConfig(), &fakeConsumer{}, h.factory)
+	b.Start()
+	h.client.setPublishErr(errors.New("publish to x timed out"))
+
+	const hint = "still unable to reach broker"
+	for i := 0; i < 3; i++ {
+		b.publishState()
+	}
+	if got := strings.Count(buf.String(), hint); got != 1 {
+		t.Fatalf("hint logged %d times across 3 failing publishes, want 1", got)
+	}
+
+	// A successful publish rearms the hint so a later outage surfaces again.
+	h.client.setPublishErr(nil)
+	b.publishState()
+	buf.Reset()
+	h.client.setPublishErr(errors.New("publish to x timed out"))
+	b.publishState()
+	if got := strings.Count(buf.String(), hint); got != 1 {
+		t.Fatalf("hint logged %d times after rearm, want 1", got)
+	}
+}
+
+// TestHAWebUIPortWarning verifies a broker resolving to port 8123 triggers the
+// startup warning about Home Assistant's web UI port.
+func TestHAWebUIPortWarning(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	})
+
+	cfg := testConfig()
+	cfg.MQTT.Broker = "tcp://homeassistant.local:8123"
+	h := &clientHolder{}
+	b := New(cfg, &fakeConsumer{}, h.factory)
+	b.Start()
+
+	if !strings.Contains(buf.String(), "8123") || !strings.Contains(buf.String(), "web UI") {
+		t.Fatalf("expected HA web UI port warning, log was:\n%s", buf.String())
 	}
 }
