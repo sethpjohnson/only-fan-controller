@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.22-bookworm AS builder
+FROM golang:1.25-bookworm AS builder
 
 RUN apt-get update && apt-get install -y gcc libsqlite3-dev && rm -rf /var/lib/apt/lists/*
 
@@ -10,14 +10,24 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /only-fan-controller ./cmd/controller
 
-# Runtime stage - NVIDIA CUDA base for built-in nvidia-smi support
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+# Runtime stage - slim Debian base. This service only shells out to nvidia-smi;
+# it doesn't link against CUDA/driver libraries directly. The NVIDIA Container
+# Toolkit's "utility" driver capability (the default when NVIDIA_DRIVER_CAPABILITIES
+# is unset, per NVIDIA's docs: required for nvidia-smi/NVML) injects the nvidia-smi
+# binary and driver libraries into the container at `docker run` time via
+# --gpus all/--runtime=nvidia, regardless of base image - a CUDA base image is not
+# required. This drops the runtime image from ~"nvidia/cuda:12.4.1-runtime" (multiple
+# GB) to a slim Debian base (tens of MB).
+FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     ipmitool \
     libsqlite3-0 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=utility
 
 WORKDIR /app
 
