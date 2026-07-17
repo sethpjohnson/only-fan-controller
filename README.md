@@ -154,6 +154,77 @@ Other safety behavior worth knowing:
   `intensity` to `low`/`medium`/`high`, and `action` to `start`/`stop`;
   everything else is rejected with `400`.
 
+## Home Assistant (MQTT)
+
+Optional. Off by default. When enabled, the controller connects to your MQTT
+broker, self-registers in Home Assistant via **MQTT Discovery**, publishes its
+state every control tick, and accepts fan overrides and workload hints over MQTT
+— full parity with the HTTP API.
+
+Enable it in `config.yaml`:
+
+```yaml
+mqtt:
+  enabled: true
+  broker: "tcp://192.168.1.10:1883"
+  username: "homeassistant"
+  password: "your-broker-password"
+  client_id: "only-fan-controller"
+  base_topic: "only-fan-controller"
+  discovery_prefix: "homeassistant"
+```
+
+Or via environment variables: `MQTT_ENABLED=true`, `MQTT_BROKER=tcp://…`,
+`MQTT_USERNAME=…`, `MQTT_PASSWORD=…`.
+
+### What appears in Home Assistant
+
+All entities are grouped under one device, **Only Fan Controller**:
+
+| Entity | Type | Notes |
+|--------|------|-------|
+| CPU Temperature, GPU Temperature | sensor | °C |
+| Fan Speed, Target Fan Speed | sensor | % |
+| Thermal Zone, Failsafe Reason | sensor | text |
+| Failsafe Active, Restore Pending, Last Fan Write Failed | binary_sensor | `problem` class |
+| Override Fan Speed | number | slider bound to `min_speed`/`max_speed`; sends a 1-hour override |
+| Clear Fan Override | button | clears any active override |
+
+The device is marked **unavailable** the instant the process dies — the broker
+publishes the Last Will (`offline`) on ungraceful disconnect, giving you free
+external monitoring for the fail-safe scenarios.
+
+### Topics
+
+- `only-fan-controller/availability` — retained `online`/`offline`.
+- `only-fan-controller/state` — retained JSON, one document per control tick.
+- `only-fan-controller/cmd/override` — `{"speed": 60, "duration_seconds": 3600, "reason": "..."}`
+- `only-fan-controller/cmd/override/clear` — any payload clears the override.
+- `only-fan-controller/cmd/hint` — `{"type": "transcode", "action": "start|stop", "intensity": "high", "source": "plex", "duration_estimate": 120}`
+
+Commands go through the exact same safety clamps and validation as the HTTP API:
+speed is clamped to `min_speed`/`max_speed`, override duration is capped at 24h,
+the critical-temperature ramp overrides everything, and hint fields are charset/
+length checked. A malformed command is logged and dropped, never applied.
+
+Command topics must be published **without** the retain flag — a retained
+command would be replayed by the broker on every reconnect and restart. The
+bridge deliberately drops retained messages on the command topics (logging the
+drop once per topic) so a stray `mosquitto_pub -r` or a misconfigured automation
+cannot silently re-fire the fans forever.
+
+Hints have no dedicated HA entity (a source/type/intensity tuple doesn't map to
+one) — drive `cmd/hint` from an HA automation for the full-parity escape hatch.
+
+### Security
+
+**MQTT command authorization is your broker's authentication.** The HTTP bearer
+token is HTTP-only and does not apply here — anyone who can publish to the broker
+can command the fans, so protect it with broker credentials/ACLs. The blast
+radius is still bounded by the controller-level clamps and the critical-temp
+override. **There is no TLS in v1**; keep the broker on a trusted LAN or in front
+of a TLS-terminating proxy.
+
 ## API Endpoints
 
 ### GET /api/status
@@ -328,6 +399,10 @@ All config options can be overridden via environment variables:
 | `CHECK_INTERVAL` | Seconds between checks | 10 |
 | `API_PORT` | API/Dashboard port | 8086 |
 | `API_TOKEN` | Bearer token for mutating endpoints | - (loopback-only) |
+| `MQTT_ENABLED` | Enable Home Assistant MQTT bridge | false |
+| `MQTT_BROKER` | MQTT broker URL (`tcp://host:port`) | - (required when enabled) |
+| `MQTT_USERNAME` | MQTT broker username | - |
+| `MQTT_PASSWORD` | MQTT broker password | - |
 
 ## Unraid Installation
 

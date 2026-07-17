@@ -67,6 +67,20 @@ storage:
   # at startup and then once a day. Must be > 0.
   retention_days: 30
 
+# Optional Home Assistant integration over MQTT. Off by default: when disabled
+# there is zero MQTT activity and no behavior change. When enabled, `broker` is
+# REQUIRED (the service refuses to start otherwise). There is NO TLS support —
+# anyone who can publish to the broker can command the fans, so protect it with
+# broker credentials/ACLs. Publish cadence reuses monitoring.interval above.
+mqtt:
+  enabled: false                     # off by default
+  broker: "tcp://192.168.1.10:1883"  # required when enabled (tcp://host:port)
+  username: ""                       # optional broker username
+  password: ""                       # optional broker password; never exposed via /api/config
+  client_id: "only-fan-controller"   # MQTT client id and HA device identifier
+  base_topic: "only-fan-controller"  # root for state/command/availability topics
+  discovery_prefix: "homeassistant"  # HA MQTT Discovery root
+
 # Logs go to stderr; there is no file-logging config. Docker/systemd/your
 # process supervisor is responsible for capturing and rotating them (e.g.
 # `docker logs`, or the json-file/local log driver's rotation options).

@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sethpjohnson/only-fan-controller/internal/config"
 	"github.com/sethpjohnson/only-fan-controller/internal/controller"
+	"github.com/sethpjohnson/only-fan-controller/internal/validate"
 )
 
 func init() { gin.SetMode(gin.TestMode) }
@@ -25,6 +26,30 @@ func newTestServer(t *testing.T, token string) *Server {
 	cfg.Dashboard.Enabled = false
 	ctrl := controller.NewFanController(cfg, nil, nil, nil)
 	return NewServer(cfg, ctrl, nil)
+}
+
+// TestGetConfigDoesNotLeakMQTTPassword locks in that /api/config never exposes
+// the MQTT broker password (MQTTConfig.Password carries json:"-", and
+// handleGetConfig builds a hand-picked map that omits the mqtt section entirely).
+func TestGetConfigDoesNotLeakMQTTPassword(t *testing.T) {
+	cfg := config.Default()
+	cfg.Dashboard.Enabled = false
+	cfg.MQTT.Enabled = true
+	cfg.MQTT.Broker = "tcp://10.0.0.5:1883"
+	cfg.MQTT.Password = "super-secret-broker-pw"
+	ctrl := controller.NewFanController(cfg, nil, nil, nil)
+	srv := NewServer(cfg, ctrl, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rec := httptest.NewRecorder()
+	srv.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/config = %d, want 200", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "super-secret-broker-pw") {
+		t.Fatalf("/api/config leaked mqtt.password: %s", rec.Body.String())
+	}
 }
 
 // doRequest issues a request against the server's router. A non-empty token is
@@ -207,7 +232,7 @@ func TestOverrideReasonValidation(t *testing.T) {
 		{"empty reason allowed", "", http.StatusOK},
 		{"newline rejected", "line1\nline2", http.StatusBadRequest},
 		{"tab rejected", "reason\twith\ttab", http.StatusBadRequest},
-		{"overlong reason rejected", strings.Repeat("a", maxOverrideReasonLen+1), http.StatusBadRequest},
+		{"overlong reason rejected", strings.Repeat("a", validate.MaxOverrideReasonLen+1), http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
