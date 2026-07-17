@@ -23,6 +23,7 @@ func NewMockFanController(cfg *config.Config, store *storage.Store) *MockFanCont
 		cpuMon:     nil,
 		gpuMon:     nil,
 		store:      store,
+		runCommand: realRunCommand,
 		hints:      make(map[string]*WorkloadHint),
 		stopChan:   make(chan struct{}),
 		cpuHistory: make([]tempPoint, 0),
@@ -84,13 +85,14 @@ func (mfc *MockFanController) mockControlLoop() {
 	// Just update internal state (no actual IPMI commands)
 	mfc.mu.Lock()
 	mfc.currentSpeed = target
+	zone := mfc.currentZone
 	mfc.mu.Unlock()
 
 	// Store reading
 	mfc.store.RecordReading(cpuReading.Max, gpuReading.Max, target)
 
 	log.Printf("[MOCK] CPU: %d°C | GPU: %d°C | Zone: %s | Fan: %d%%",
-		cpuReading.Max, gpuReading.Max, mfc.currentZone, target)
+		cpuReading.Max, gpuReading.Max, zone, target)
 }
 
 func (mfc *MockFanController) generateMockCPU() *monitor.CPUReading {
@@ -104,7 +106,7 @@ func (mfc *MockFanController) generateMockCPU() *monitor.CPUReading {
 	} else {
 		mockCPUBase -= 0.1 // Cooling
 	}
-	
+
 	if mockCPUBase < 35 {
 		mockCPUBase = 35
 	}

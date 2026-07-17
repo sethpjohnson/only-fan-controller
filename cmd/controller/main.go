@@ -1,12 +1,15 @@
 package main
 
 import (
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/sethpjohnson/only-fan-controller/internal/api"
@@ -86,29 +89,77 @@ func applyEnvOverrides(cfg *config.Config) {
 	}
 }
 
-// FanControllerInterface allows both real and mock controllers
-type FanControllerInterface interface {
-	Run()
-	Stop()
-	RestoreAutoMode() error
-	GetStatus() *controller.Status
-	AddHint(hint *controller.WorkloadHint)
-	RemoveHint(source string)
-	SetOverride(speed int, duration interface{}, reason string)
-	ClearOverride()
+func main() {
+	os.Exit(run())
 }
 
-func main() {
+// runControlLoop runs the fan control loop and guarantees that a panic restores
+// BMC automatic fan control before the process gives up. Any panic is reported
+// on errCh so main can shut down through the same path that restores auto mode.
+// The only ways to exit without restoring auto mode are SIGKILL / power loss.
+func runControlLoop(loop func(), restore func() error, errCh chan<- error) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in control loop: %v", r)
+			if err := restore(); err != nil {
+				log.Printf("CRITICAL: failed to restore auto fan mode after panic: %v", err)
+			}
+			errCh <- fmt.Errorf("control loop panic: %v", r)
+		}
+	}()
+	loop()
+}
+
+// restoreOnce wraps a restore function so it runs at most once across all
+// callers. On a control-loop panic the recover handler restores auto mode AND
+// the shutdown path calls restore again; the guard makes the second call a
+// no-op so the BMC is toggled exactly once.
+func restoreOnce(restore func() error) func() error {
+	var once sync.Once
+	var firstErr error
+	return func() error {
+		once.Do(func() { firstErr = restore() })
+		return firstErr
+	}
+}
+
+// resolveConfig loads the config, distinguishing a genuinely absent file (safe
+// to fall back to defaults + env overrides) from a present-but-invalid file
+// (parse or safety-validation failure). For the latter we REFUSE to start rather
+// than silently fall back to Default(), which would discard the operator's real
+// iDRAC host/credentials and come up pointed at `-H "" -U root -P ""` — making
+// every IPMI call fail, including RestoreAutoMode itself. A process that never
+// starts never enables manual mode, so the BMC keeps automatic control: that is
+// the fail-safe outcome.
+func resolveConfig(path string) (*config.Config, error) {
+	cfg, err := config.Load(path)
+	if err == nil {
+		return cfg, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		log.Printf("Config file %s not found; using default configuration", path)
+		return config.Default(), nil
+	}
+	// File exists but is unreadable, unparseable, or fails safety validation.
+	return nil, err
+}
+
+// run holds the real program body so that deferred cleanup (e.g. store.Close)
+// always runs, even on an abnormal exit. main() only translates the returned
+// status into a process exit code.
+func run() int {
 	configPath := flag.String("config", "/etc/only-fan-controller/config.yaml", "Path to configuration file")
 	demoMode := flag.Bool("demo", false, "Run in demo mode with simulated temperatures (no actual fan control)")
 	flag.Parse()
 
 	// Load configuration
-	cfg, err := config.Load(*configPath)
+	cfg, err := resolveConfig(*configPath)
 	if err != nil {
-		log.Printf("Warning: Could not load config from %s: %v", *configPath, err)
-		log.Println("Using default configuration")
-		cfg = config.Default()
+		log.Printf("FATAL: refusing to start with an invalid config %s: %v", *configPath, err)
+		log.Println("The config file exists but is invalid. NOT falling back to defaults, because that would")
+		log.Println("discard your iDRAC credentials and leave the controller unable to talk to the BMC.")
+		log.Println("The BMC keeps automatic fan control until you fix the config and restart.")
+		return 1
 	}
 
 	// Override with environment variables
@@ -128,19 +179,25 @@ func main() {
 	// Initialize storage for history
 	store, err := storage.New(cfg.Storage.Path)
 	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
+		log.Printf("Failed to initialize storage: %v", err)
+		return 1
 	}
 	defer store.Close()
 
+	// errCh carries any fatal error (API server failure, control-loop panic)
+	// back to the shutdown path so cleanup + auto-mode restore always run.
+	errCh := make(chan error, 1)
+
 	var fanCtrl *controller.FanController
+	var restore func() error
 
 	if *demoMode {
-		// Use mock controller
+		// Use mock controller. Its RestoreAutoMode is log-only, so it is safe to
+		// call on every exit path without touching hardware.
 		mockCtrl := controller.NewMockFanController(cfg, store)
 		fanCtrl = mockCtrl.FanController
-
-		// Start mock control loop
-		go mockCtrl.Run()
+		restore = restoreOnce(mockCtrl.RestoreAutoMode)
+		go runControlLoop(mockCtrl.Run, restore, errCh)
 	} else {
 		// Initialize real monitors
 		cpuMon := monitor.NewCPUMonitor(cfg)
@@ -148,38 +205,45 @@ func main() {
 
 		// Initialize real fan controller
 		fanCtrl = controller.NewFanController(cfg, cpuMon, gpuMon, store)
-
-		// Start the control loop
-		go fanCtrl.Run()
+		restore = restoreOnce(fanCtrl.RestoreAutoMode)
+		go runControlLoop(fanCtrl.Run, restore, errCh)
 	}
 
 	// Initialize API server
 	apiServer := api.NewServer(cfg, fanCtrl, store)
 
-	// Start API server
+	// Start API server. On error, report through errCh instead of os.Exit so the
+	// shutdown path (which restores BMC auto mode) still runs.
 	go func() {
 		if err := apiServer.Run(); err != nil {
-			log.Fatalf("API server error: %v", err)
+			errCh <- fmt.Errorf("API server error: %w", err)
 		}
 	}()
 
 	log.Printf("API server listening on %s:%d", cfg.API.Host, cfg.API.Port)
 	log.Printf("Dashboard: http://localhost:%d/dashboard/", cfg.API.Port)
 
-	// Wait for shutdown signal
+	// Wait for a shutdown signal or a fatal error.
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	<-sigChan
 
-	log.Println("Shutting down...")
+	exitCode := 0
+	select {
+	case <-sigChan:
+		log.Println("Shutting down...")
+	case err := <-errCh:
+		log.Printf("Fatal: %v", err)
+		exitCode = 1
+	}
+
 	fanCtrl.Stop()
 
-	// Restore Dell automatic fan control on exit (only in real mode)
-	if !*demoMode {
-		if err := fanCtrl.RestoreAutoMode(); err != nil {
-			log.Printf("Warning: Failed to restore auto fan mode: %v", err)
-		}
+	// Restore BMC automatic fan control on every exit path. This is the single
+	// choke point that keeps the machine cooled once we leave manual mode.
+	if err := restore(); err != nil {
+		log.Printf("Warning: Failed to restore auto fan mode: %v", err)
 	}
 
 	log.Println("Shutdown complete")
+	return exitCode
 }

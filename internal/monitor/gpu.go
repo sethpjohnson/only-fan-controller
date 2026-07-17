@@ -2,7 +2,9 @@ package monitor
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
+	"fmt"
 	"log"
 	"os/exec"
 	"strconv"
@@ -20,9 +22,9 @@ type GPUDevice struct {
 	Name        string `json:"name"`
 	Temp        int    `json:"temp"`
 	Utilization int    `json:"utilization"`
-	MemoryUsed  int    `json:"memory_used"`   // MB
-	MemoryTotal int    `json:"memory_total"`  // MB
-	PowerDraw   int    `json:"power_draw"`    // Watts
+	MemoryUsed  int    `json:"memory_used"`  // MB
+	MemoryTotal int    `json:"memory_total"` // MB
+	PowerDraw   int    `json:"power_draw"`   // Watts
 }
 
 type GPUReading struct {
@@ -40,8 +42,11 @@ func (m *GPUMonitor) Read() (*GPUReading, error) {
 		return &GPUReading{}, nil
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout(m.cfg))
+	defer cancel()
+
 	// Query nvidia-smi for key metrics in CSV format
-	cmd := exec.Command(m.cfg.GPU.NvidiaSmiPath,
+	cmd := exec.CommandContext(ctx, m.cfg.GPU.NvidiaSmiPath,
 		"--query-gpu=index,name,temperature.gpu,utilization.gpu,memory.used,memory.total,power.draw",
 		"--format=csv,noheader,nounits",
 	)
@@ -51,12 +56,24 @@ func (m *GPUMonitor) Read() (*GPUReading, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("nvidia-smi timed out after %s", commandTimeout(m.cfg))
+			return nil, fmt.Errorf("nvidia-smi timed out: %w", err)
+		}
 		log.Printf("nvidia-smi error: %v, stderr: %s", err, stderr.String())
 		return nil, err
 	}
 
-	devices := parseGPUOutput(stdout.String())
-	
+	// Zero devices parsed while GPU monitoring is enabled is an error, not a
+	// silent 0°C reading — otherwise empty/garbage nvidia-smi output would look
+	// like a healthy "cold" GPU and the fail-safe would never engage. Mirrors the
+	// CPU treatment.
+	devices, err := parseGPUOutput(stdout.String())
+	if err != nil {
+		log.Printf("GPU output parse failed: %v; raw output: %q", err, stdout.String())
+		return nil, err
+	}
+
 	reading := &GPUReading{
 		Devices: devices,
 		Max:     maxGPUTemp(devices),
@@ -65,15 +82,18 @@ func (m *GPUMonitor) Read() (*GPUReading, error) {
 	return reading, nil
 }
 
-// parseGPUOutput parses nvidia-smi CSV output
-func parseGPUOutput(output string) []GPUDevice {
+// parseGPUOutput parses nvidia-smi CSV output. It returns an error when no valid
+// device rows are present.
+func parseGPUOutput(output string) ([]GPUDevice, error) {
 	var devices []GPUDevice
 
 	reader := csv.NewReader(strings.NewReader(output))
+	// Tolerate rows with unexpected field counts (skipped below) rather than
+	// failing the whole read; nvidia-smi occasionally emits ragged rows.
+	reader.FieldsPerRecord = -1
 	records, err := reader.ReadAll()
 	if err != nil {
-		log.Printf("Failed to parse nvidia-smi output: %v", err)
-		return devices
+		return nil, fmt.Errorf("failed to parse nvidia-smi CSV output: %w", err)
 	}
 
 	for _, record := range records {
@@ -99,7 +119,11 @@ func parseGPUOutput(output string) []GPUDevice {
 		devices = append(devices, device)
 	}
 
-	return devices
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("no valid GPU device rows found in nvidia-smi output")
+	}
+
+	return devices, nil
 }
 
 func parseInt(s string) int {
@@ -108,12 +132,12 @@ func parseInt(s string) int {
 	if s == "" || s == "[N/A]" || s == "N/A" {
 		return 0
 	}
-	
+
 	// Remove any decimal part (e.g., "45.00" -> "45")
 	if idx := strings.Index(s, "."); idx != -1 {
 		s = s[:idx]
 	}
-	
+
 	val, err := strconv.Atoi(s)
 	if err != nil {
 		return 0
