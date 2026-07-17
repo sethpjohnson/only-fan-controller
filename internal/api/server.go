@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/sethpjohnson/only-fan-controller/internal/config"
@@ -33,6 +34,26 @@ var allowedIntensities = map[string]bool{"": true, "low": true, "medium": true, 
 
 // allowedHintActions is the closed set of hint actions the controller acts on.
 var allowedHintActions = map[string]bool{"start": true, "stop": true}
+
+// maxOverrideReasonLen bounds the free-text override reason.
+const maxOverrideReasonLen = 128
+
+// validateOverrideReason enforces a length cap and rejects control characters
+// on the override reason. Unlike hint source/type, this is human-readable
+// prose (shown to an operator, not interpolated as an identifier), so normal
+// punctuation, spaces, and quotes are all valid free text -- only control
+// characters and excessive length are rejected.
+func validateOverrideReason(reason string) error {
+	if len(reason) > maxOverrideReasonLen {
+		return fmt.Errorf("reason exceeds %d characters", maxOverrideReasonLen)
+	}
+	for _, r := range reason {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("reason must not contain control characters")
+		}
+	}
+	return nil
+}
 
 //go:embed static/*
 var staticFiles embed.FS
@@ -287,6 +308,11 @@ func (s *Server) handleOverride(c *gin.Context) {
 
 	if req.Speed < 0 || req.Speed > 100 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "speed must be 0-100"})
+		return
+	}
+
+	if err := validateOverrideReason(req.Reason); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 

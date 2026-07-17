@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -49,26 +50,47 @@ func doRequest(s *Server, method, path, token, remoteAddr string, body []byte) *
 }
 
 const validOverrideBody = `{"speed":50,"duration":60,"reason":"test"}`
+const validHintBody = `{"type":"gpu_load","action":"start","intensity":"high","source":"whisper"}`
+
+// mutatingRoutes lists every route registered inside the requireAuth group.
+// Parameterizing the auth-middleware tests across all of them (rather than
+// just POST /api/override) means a future mutating route registered outside
+// the mutate group -- and therefore missing auth -- gets caught by these
+// tests instead of shipping unprotected.
+var mutatingRoutes = []struct {
+	name   string
+	method string
+	path   string
+	body   []byte
+}{
+	{"POST /api/hint", http.MethodPost, "/api/hint", []byte(validHintBody)},
+	{"DELETE /api/hint/:source", http.MethodDelete, "/api/hint/whisper", nil},
+	{"POST /api/override", http.MethodPost, "/api/override", []byte(validOverrideBody)},
+	{"DELETE /api/override", http.MethodDelete, "/api/override", nil},
+}
 
 func TestMutatingRequiresTokenWhenConfigured(t *testing.T) {
-	s := newTestServer(t, "s3cret")
-	body := []byte(validOverrideBody)
+	for _, route := range mutatingRoutes {
+		t.Run(route.name, func(t *testing.T) {
+			s := newTestServer(t, "s3cret")
 
-	cases := []struct {
-		name  string
-		token string
-		want  int
-	}{
-		{"no token", "", http.StatusUnauthorized},
-		{"wrong token", "nope", http.StatusUnauthorized},
-		{"correct token", "s3cret", http.StatusOK},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Use a non-loopback peer so only the token can grant access.
-			w := doRequest(s, http.MethodPost, "/api/override", tc.token, "203.0.113.7:5555", body)
-			if w.Code != tc.want {
-				t.Fatalf("POST /api/override: got %d, want %d (body: %s)", w.Code, tc.want, w.Body.String())
+			cases := []struct {
+				name  string
+				token string
+				want  int
+			}{
+				{"no token", "", http.StatusUnauthorized},
+				{"wrong token", "nope", http.StatusUnauthorized},
+				{"correct token", "s3cret", http.StatusOK},
+			}
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					// Use a non-loopback peer so only the token can grant access.
+					w := doRequest(s, route.method, route.path, tc.token, "203.0.113.7:5555", route.body)
+					if w.Code != tc.want {
+						t.Fatalf("%s %s: got %d, want %d (body: %s)", route.method, route.path, w.Code, tc.want, w.Body.String())
+					}
+				})
 			}
 		})
 	}
@@ -96,23 +118,26 @@ func TestConfigNeverLeaksToken(t *testing.T) {
 }
 
 func TestNoTokenLoopbackOnly(t *testing.T) {
-	s := newTestServer(t, "") // no token configured
-	body := []byte(validOverrideBody)
+	for _, route := range mutatingRoutes {
+		t.Run(route.name, func(t *testing.T) {
+			s := newTestServer(t, "") // no token configured
 
-	cases := []struct {
-		name       string
-		remoteAddr string
-		want       int
-	}{
-		{"non-loopback rejected", "203.0.113.9:5000", http.StatusForbidden},
-		{"ipv4 loopback allowed", "127.0.0.1:5000", http.StatusOK},
-		{"ipv6 loopback allowed", "[::1]:5000", http.StatusOK},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			w := doRequest(s, http.MethodPost, "/api/override", "", tc.remoteAddr, body)
-			if w.Code != tc.want {
-				t.Fatalf("POST /api/override from %s: got %d, want %d", tc.remoteAddr, w.Code, tc.want)
+			cases := []struct {
+				name       string
+				remoteAddr string
+				want       int
+			}{
+				{"non-loopback rejected", "203.0.113.9:5000", http.StatusForbidden},
+				{"ipv4 loopback allowed", "127.0.0.1:5000", http.StatusOK},
+				{"ipv6 loopback allowed", "[::1]:5000", http.StatusOK},
+			}
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					w := doRequest(s, route.method, route.path, "", tc.remoteAddr, route.body)
+					if w.Code != tc.want {
+						t.Fatalf("%s %s from %s: got %d, want %d", route.method, route.path, tc.remoteAddr, w.Code, tc.want)
+					}
+				})
 			}
 		})
 	}
@@ -154,6 +179,45 @@ func TestHintValidation(t *testing.T) {
 			w := doRequest(s, http.MethodPost, "/api/hint", "", "127.0.0.1:4000", []byte(tc.body))
 			if w.Code != tc.want {
 				t.Fatalf("POST /api/hint (%s): got %d, want %d (body: %s)", tc.name, w.Code, tc.want, w.Body.String())
+			}
+		})
+	}
+}
+
+// Override reasons are human-readable free text (unlike hint source/type),
+// so quotes, spaces, and punctuation must all be accepted -- the hint-client
+// script sends reasons containing quotes -- while control characters and
+// excessive length are still rejected server-side.
+func TestOverrideReasonValidation(t *testing.T) {
+	s := newTestServer(t, "") // loopback path used below
+
+	type overrideBody struct {
+		Speed    int    `json:"speed"`
+		Duration int    `json:"duration"`
+		Reason   string `json:"reason"`
+	}
+
+	cases := []struct {
+		name   string
+		reason string
+		want   int
+	}{
+		{"normal free text", "manual override for benchmark", http.StatusOK},
+		{"quotes and punctuation allowed", `user said "too loud", quiet it down!`, http.StatusOK},
+		{"empty reason allowed", "", http.StatusOK},
+		{"newline rejected", "line1\nline2", http.StatusBadRequest},
+		{"tab rejected", "reason\twith\ttab", http.StatusBadRequest},
+		{"overlong reason rejected", strings.Repeat("a", maxOverrideReasonLen+1), http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(overrideBody{Speed: 50, Duration: 60, Reason: tc.reason})
+			if err != nil {
+				t.Fatalf("marshal body: %v", err)
+			}
+			w := doRequest(s, http.MethodPost, "/api/override", "", "127.0.0.1:4000", body)
+			if w.Code != tc.want {
+				t.Fatalf("POST /api/override (%s): got %d, want %d (body: %s)", tc.name, w.Code, tc.want, w.Body.String())
 			}
 		})
 	}
