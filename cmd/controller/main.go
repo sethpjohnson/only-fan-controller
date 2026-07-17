@@ -87,6 +87,11 @@ func applyEnvOverrides(cfg *config.Config) {
 			cfg.API.Port = i
 		}
 	}
+
+	// API bearer token for mutating endpoints
+	if v := os.Getenv("API_TOKEN"); v != "" {
+		cfg.API.Token = v
+	}
 }
 
 func main() {

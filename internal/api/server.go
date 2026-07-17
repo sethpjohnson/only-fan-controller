@@ -1,11 +1,16 @@
 package api
 
 import (
+	"crypto/subtle"
 	"embed"
 	"fmt"
 	"io/fs"
+	"log"
+	"net"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +18,21 @@ import (
 	"github.com/sethpjohnson/only-fan-controller/internal/controller"
 	"github.com/sethpjohnson/only-fan-controller/internal/storage"
 )
+
+// maxHintFieldLen bounds free-form hint identifiers (source/type). Kept small:
+// these are process names, not prose.
+const maxHintFieldLen = 64
+
+// hintFieldPattern is the allowed charset for hint source/type. Restricting to
+// this set means no server-derived hint string can carry HTML/script even if a
+// dashboard interpolation is ever missed.
+var hintFieldPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+// allowedIntensities is the closed set of intensity values AddHint understands.
+var allowedIntensities = map[string]bool{"": true, "low": true, "medium": true, "high": true}
+
+// allowedHintActions is the closed set of hint actions the controller acts on.
+var allowedHintActions = map[string]bool{"start": true, "stop": true}
 
 //go:embed static/*
 var staticFiles embed.FS
@@ -50,6 +70,11 @@ func NewServer(cfg *config.Config, ctrl *controller.FanController, store *storag
 		router: router,
 	}
 
+	if cfg.API.Token == "" {
+		log.Println("WARNING: no api.token configured (env API_TOKEN); mutating endpoints " +
+			"(override/hint) are restricted to loopback only. Set a token to control fans from other LAN hosts.")
+	}
+
 	s.setupRoutes()
 	return s
 }
@@ -58,13 +83,20 @@ func (s *Server) setupRoutes() {
 	// API routes
 	api := s.router.Group("/api")
 	{
+		// Read-only endpoints stay open: they expose no control surface.
 		api.GET("/status", s.handleStatus)
 		api.GET("/history", s.handleHistory)
-		api.POST("/hint", s.handleHint)
-		api.DELETE("/hint/:source", s.handleRemoveHint)
-		api.POST("/override", s.handleOverride)
-		api.DELETE("/override", s.handleClearOverride)
 		api.GET("/config", s.handleGetConfig)
+
+		// Mutating endpoints are gated by requireAuth (bearer token, or loopback
+		// when no token is configured).
+		mutate := api.Group("", s.requireAuth())
+		{
+			mutate.POST("/hint", s.handleHint)
+			mutate.DELETE("/hint/:source", s.handleRemoveHint)
+			mutate.POST("/override", s.handleOverride)
+			mutate.DELETE("/override", s.handleClearOverride)
+		}
 	}
 
 	// Dashboard static files
@@ -82,6 +114,99 @@ func (s *Server) setupRoutes() {
 func (s *Server) Run() error {
 	addr := fmt.Sprintf("%s:%d", s.cfg.API.Host, s.cfg.API.Port)
 	return s.router.Run(addr)
+}
+
+// requireAuth guards the mutating endpoints.
+//
+//   - When a token is configured, the request must carry a matching
+//     "Authorization: Bearer <token>" header (compared in constant time). Any
+//     other case is 401.
+//   - When no token is configured, only requests whose connection peer is a
+//     loopback address are accepted (403 otherwise). This preserves single-user,
+//     same-host convenience without silently exposing fan control to the LAN.
+//
+// Loopback is decided from the real connection peer (c.Request.RemoteAddr), NOT
+// from X-Forwarded-For / X-Real-IP: those are client-supplied and trivially
+// spoofable, so trusting them would defeat the check.
+func (s *Server) requireAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := s.cfg.API.Token
+
+		if token == "" {
+			if !isLoopbackAddr(c.Request.RemoteAddr) {
+				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+					"error": "mutating endpoints require a loopback connection or a configured api.token",
+				})
+				return
+			}
+			c.Next()
+			return
+		}
+
+		if !bearerTokenMatches(c.GetHeader("Authorization"), token) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "missing or invalid bearer token",
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
+// isLoopbackAddr reports whether a net.Conn RemoteAddr string ("host:port")
+// refers to a loopback address.
+func isLoopbackAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		// RemoteAddr is normally host:port; fall back to treating the whole
+		// string as a bare host so an unexpected format fails closed via ParseIP.
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// bearerTokenMatches reports whether an Authorization header carries a bearer
+// token equal to expected. The comparison is constant-time to avoid leaking the
+// token via response timing.
+func bearerTokenMatches(header, expected string) bool {
+	got, ok := strings.CutPrefix(header, "Bearer ")
+	if !ok {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
+}
+
+// validateHintRequest enforces length, charset, and closed-set bounds on the
+// client-controlled hint fields before they are stored or echoed back. This is
+// the server-side half of the XSS defense (the dashboard escapes on render).
+func validateHintRequest(req *HintRequest) error {
+	if err := validateHintField("source", req.Source); err != nil {
+		return err
+	}
+	if err := validateHintField("type", req.Type); err != nil {
+		return err
+	}
+	if !allowedHintActions[req.Action] {
+		return fmt.Errorf("action must be one of start, stop")
+	}
+	if !allowedIntensities[req.Intensity] {
+		return fmt.Errorf("intensity must be one of low, medium, high")
+	}
+	if req.DurationEstimate < 0 {
+		return fmt.Errorf("duration_estimate must not be negative")
+	}
+	return nil
+}
+
+func validateHintField(name, value string) error {
+	if len(value) > maxHintFieldLen {
+		return fmt.Errorf("%s exceeds %d characters", name, maxHintFieldLen)
+	}
+	if !hintFieldPattern.MatchString(value) {
+		return fmt.Errorf("%s must match [A-Za-z0-9_.-]", name)
+	}
+	return nil
 }
 
 // GET /api/status
@@ -115,6 +240,11 @@ func (s *Server) handleHistory(c *gin.Context) {
 func (s *Server) handleHint(c *gin.Context) {
 	var req HintRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := validateHintRequest(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -162,7 +292,7 @@ func (s *Server) handleOverride(c *gin.Context) {
 
 	duration := time.Duration(req.Duration) * time.Second
 	s.ctrl.SetOverride(req.Speed, duration, req.Reason)
-	
+
 	c.JSON(http.StatusOK, gin.H{
 		"status":   "override set",
 		"speed":    req.Speed,
@@ -180,11 +310,11 @@ func (s *Server) handleClearOverride(c *gin.Context) {
 func (s *Server) handleGetConfig(c *gin.Context) {
 	// Return sanitized config (no passwords)
 	c.JSON(http.StatusOK, gin.H{
-		"idrac_host":    s.cfg.IDRAC.Host,
-		"gpu_enabled":   s.cfg.GPU.Enabled,
-		"interval":      s.cfg.Monitoring.Interval,
-		"zones":         s.cfg.Zones,
-		"fan_control":   s.cfg.FanControl,
-		"api_port":      s.cfg.API.Port,
+		"idrac_host":  s.cfg.IDRAC.Host,
+		"gpu_enabled": s.cfg.GPU.Enabled,
+		"interval":    s.cfg.Monitoring.Interval,
+		"zones":       s.cfg.Zones,
+		"fan_control": s.cfg.FanControl,
+		"api_port":    s.cfg.API.Port,
 	})
 }

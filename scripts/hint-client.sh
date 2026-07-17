@@ -8,6 +8,18 @@
 
 CONTROLLER_URL="${SMART_FAN_URL:-http://localhost:8086}"
 
+# Bearer token for the mutating endpoints (override / hint). Set API_TOKEN to
+# match api.token in the controller config. When empty, the controller only
+# accepts mutating requests from the local host (loopback).
+API_TOKEN="${API_TOKEN:-}"
+
+# AUTH_ARGS carries the Authorization header for mutating requests when a token
+# is configured; it stays empty for read-only calls and loopback-only setups.
+AUTH_ARGS=()
+if [ -n "$API_TOKEN" ]; then
+    AUTH_ARGS=(-H "Authorization: Bearer $API_TOKEN")
+fi
+
 case "$1" in
     start)
         SOURCE="$2"
@@ -20,6 +32,7 @@ case "$1" in
         fi
         
         curl -s -X POST "$CONTROLLER_URL/api/hint" \
+            "${AUTH_ARGS[@]}" \
             -H "Content-Type: application/json" \
             -d "{
                 \"type\": \"gpu_load\",
@@ -39,6 +52,7 @@ case "$1" in
         fi
         
         curl -s -X POST "$CONTROLLER_URL/api/hint" \
+            "${AUTH_ARGS[@]}" \
             -H "Content-Type: application/json" \
             -d "{
                 \"type\": \"gpu_load\",
@@ -62,6 +76,7 @@ case "$1" in
         fi
         
         curl -s -X POST "$CONTROLLER_URL/api/override" \
+            "${AUTH_ARGS[@]}" \
             -H "Content-Type: application/json" \
             -d "{
                 \"speed\": $SPEED,
@@ -71,7 +86,8 @@ case "$1" in
         ;;
         
     clear-override)
-        curl -s -X DELETE "$CONTROLLER_URL/api/override" | jq .
+        curl -s -X DELETE "$CONTROLLER_URL/api/override" \
+            "${AUTH_ARGS[@]}" | jq .
         ;;
         
     *)
@@ -87,6 +103,10 @@ case "$1" in
         echo "  clear-override                         - Clear manual override"
         echo ""
         echo "Intensity: low, medium, high"
+        echo ""
+        echo "Environment:"
+        echo "  SMART_FAN_URL   Controller base URL (default http://localhost:8086)"
+        echo "  API_TOKEN       Bearer token for override/hint (required off-host)"
         echo ""
         echo "Examples:"
         echo "  $0 start whisper high 300"

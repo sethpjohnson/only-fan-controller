@@ -27,8 +27,23 @@ fan_control:
   cooldown_delay: 60         # Seconds below threshold before ramping down
 
 api:
+  # host 0.0.0.0 binds every interface — REQUIRED for container/bridge
+  # networking, but it means the API/dashboard is reachable from every host on
+  # your LAN. The control surface is protected by the token below, NOT by the
+  # bind address. There is no built-in TLS; if you expose this beyond a trusted
+  # LAN, put it behind a reverse proxy (nginx/Caddy/Traefik) that terminates TLS.
   host: "0.0.0.0"
   port: 8086
+  # Bearer token required on mutating endpoints (POST/DELETE /api/override and
+  # /api/hint). Read-only endpoints (/api/status, /api/history, /api/config) and
+  # the dashboard stay open. Env override: API_TOKEN.
+  #
+  # If left empty, mutating endpoints are accepted ONLY from the local host
+  # (loopback) and a warning is logged at startup — convenient for a single-host
+  # setup, but it means no other LAN host can change fan speed. Set a token to
+  # control fans from another machine (and pass it to scripts/hint-client.sh via
+  # the API_TOKEN env var).
+  token: ""
 
 dashboard:
   enabled: true

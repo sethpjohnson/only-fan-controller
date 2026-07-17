@@ -334,6 +334,20 @@
             }
         }
 
+        // escapeHtml renders any server-derived value inert before it is placed
+        // into innerHTML. All interpolations below run through it — sensor/hint
+        // strings (GPU names, hint source/type/intensity) originate outside the
+        // dashboard and must never be trusted as markup.
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[ch]));
+        }
+
         function updateDashboard(data) {
             // CPUs - show each CPU like GPUs
             const cpuList = document.getElementById('cpu-list');
@@ -343,7 +357,7 @@
                         <div>
                             <div class="gpu-name">CPU ${idx + 1}</div>
                         </div>
-                        <div class="gpu-temp">${temp}°C</div>
+                        <div class="gpu-temp">${escapeHtml(temp)}°C</div>
                     </div>
                 `).join('');
             } else {
@@ -420,12 +434,12 @@
                 gpuList.innerHTML = data.gpu.Devices.map(gpu => `
                     <div class="gpu-item">
                         <div>
-                            <div class="gpu-name">${gpu.name}</div>
+                            <div class="gpu-name">${escapeHtml(gpu.name)}</div>
                             <div style="font-size:0.75rem;color:#666">
-                                ${gpu.utilization}% util | ${gpu.power_draw}W
+                                ${escapeHtml(gpu.utilization)}% util | ${escapeHtml(gpu.power_draw)}W
                             </div>
                         </div>
-                        <div class="gpu-temp">${gpu.temp}°C</div>
+                        <div class="gpu-temp">${escapeHtml(gpu.temp)}°C</div>
                     </div>
                 `).join('');
             } else {
@@ -437,10 +451,10 @@
             if (data.active_hints?.length > 0) {
                 hintsList.innerHTML = data.active_hints.map(hint => `
                     <div class="hint-item">
-                        <div class="hint-source">${hint.source}</div>
+                        <div class="hint-source">${escapeHtml(hint.source)}</div>
                         <div class="hint-details">
-                            ${hint.type} | ${hint.intensity} intensity | 
-                            min ${hint.min_fan_speed}%
+                            ${escapeHtml(hint.type)} | ${escapeHtml(hint.intensity)} intensity |
+                            min ${escapeHtml(hint.min_fan_speed)}%
                         </div>
                     </div>
                 `).join('');

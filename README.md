@@ -62,6 +62,54 @@ Shows:
 - Temperature history graph with threshold lines
 - Active workload hints
 
+## API Security
+
+The API binds `0.0.0.0` by default (required for container/bridge networking), so
+the dashboard and API are reachable from every host on your LAN. Fan control is
+protected by a **bearer token**, not by the bind address.
+
+- **Mutating endpoints** — `POST`/`DELETE /api/override` and `POST /api/hint`,
+  `DELETE /api/hint/:source` — require the token.
+- **Read-only endpoints** — `/api/status`, `/api/history`, `/api/config`, and the
+  dashboard — stay open.
+
+Set the token via `api.token` in the config (or the `API_TOKEN` env var), then
+send it as an `Authorization: Bearer <token>` header:
+
+```bash
+curl -X POST http://localhost:8086/api/override \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"speed": 50, "duration": 300, "reason": "testing"}'
+```
+
+`scripts/hint-client.sh` reads `API_TOKEN` from the environment and adds the
+header automatically.
+
+**If no token is configured**, mutating endpoints are accepted **only from the
+local host (loopback)** and a warning is logged at startup. This keeps a
+single-host setup convenient without silently exposing fan control to the LAN.
+Loopback is determined from the real connection peer — a spoofed
+`X-Forwarded-For` cannot bypass it.
+
+There is no built-in TLS. To expose the controller beyond a trusted LAN, run it
+behind a reverse proxy (nginx / Caddy / Traefik) that terminates TLS.
+
+> **Upgrading from an earlier version?** No breaking changes: add `api.token` to
+> your config (or set `API_TOKEN`) to enable off-host control. Existing
+> docker-compose / Unraid deployments keep working unchanged — without a token
+> they simply restrict control to loopback.
+
+Other safety behavior worth knowing:
+
+- Manual overrides are **clamped** to the configured `min_speed`/`max_speed`
+  band and **capped at 24 hours** (an override with `duration: 0` is treated as
+  24h, never truly indefinite). A critical temperature still ramps fans to max,
+  overriding any manual override.
+- Hint `source`/`type` are restricted to `[A-Za-z0-9_.-]` (max 64 chars),
+  `intensity` to `low`/`medium`/`high`, and `action` to `start`/`stop`;
+  everything else is rejected with `400`.
+
 ## API Endpoints
 
 ### GET /api/status
@@ -205,6 +253,7 @@ All config options can be overridden via environment variables:
 | `FAN_GPU_THRESHOLD` | GPU temp threshold (°C) | 60 |
 | `CHECK_INTERVAL` | Seconds between checks | 10 |
 | `API_PORT` | API/Dashboard port | 8086 |
+| `API_TOKEN` | Bearer token for mutating endpoints | - (loopback-only) |
 
 ## Unraid Installation
 

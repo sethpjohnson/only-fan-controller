@@ -495,10 +495,16 @@ func (fc *FanController) calculateTarget(cpuReading *monitor.CPUReading, gpuRead
 		return speed
 	}
 
-	// Check for manual override
+	// Check for manual override. The override speed is clamped to the configured
+	// MinSpeed/MaxSpeed band here as well as at SetOverride time — this is the
+	// single point that decides the applied fan speed, so a clamp here guarantees
+	// no override (however it was set) can drive fans outside the safe band.
+	// Note this is reached only when temperatures are NOT critical: the emergency
+	// ramp above returns first, so a clamped override never blocks critical cooling.
 	if fc.override != nil {
-		fc.targetSpeed = fc.override.Speed
-		return fc.override.Speed
+		speed := fc.clampSpeed(fc.override.Speed)
+		fc.targetSpeed = speed
+		return speed
 	}
 
 	// Simple threshold-based control with hysteresis
@@ -721,22 +727,39 @@ func (fc *FanController) RemoveHint(source string) {
 	log.Printf("Hint removed: %s", source)
 }
 
-// SetOverride sets a manual fan speed override
+// maxOverrideDuration caps how long a manual override can stay in force. An
+// indefinite override (duration <= 0) is treated as this maximum rather than
+// "forever": a forgotten override must not silently hold the fans off the
+// automatic curve indefinitely.
+const maxOverrideDuration = 24 * time.Hour
+
+// clampSpeed constrains a fan speed to the configured MinSpeed/MaxSpeed band.
+// Callers hold fc.mu.
+func (fc *FanController) clampSpeed(speed int) int {
+	return max(fc.cfg.FanControl.MinSpeed, min(fc.cfg.FanControl.MaxSpeed, speed))
+}
+
+// SetOverride sets a manual fan speed override. The speed is clamped to the
+// configured MinSpeed/MaxSpeed band and the duration is capped at
+// maxOverrideDuration (an indefinite/zero duration becomes that cap) so a manual
+// override can neither drive fans outside the safe band nor persist forever.
 func (fc *FanController) SetOverride(speed int, duration time.Duration, reason string) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
+	if duration <= 0 || duration > maxOverrideDuration {
+		duration = maxOverrideDuration
+	}
+
+	clamped := fc.clampSpeed(speed)
 	fc.override = &Override{
-		Speed:     speed,
+		Speed:     clamped,
 		Reason:    reason,
 		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(duration),
 	}
 
-	if duration > 0 {
-		fc.override.ExpiresAt = time.Now().Add(duration)
-	}
-
-	log.Printf("Override set: %d%% (%s)", speed, reason)
+	log.Printf("Override set: %d%% (%s), expires in %s", clamped, reason, duration)
 }
 
 // ClearOverride removes the manual override

@@ -491,3 +491,73 @@ func TestSetFanSpeedOnlyUpdatesCurrentSpeedOnSuccess(t *testing.T) {
 		t.Fatal("lastWriteFailed should be cleared after a successful write")
 	}
 }
+
+// --- manual-override clamping (Tier 2 C3) ---
+
+func TestSetOverrideClampsSpeedAndCapsDuration(t *testing.T) {
+	cfg := config.Default()
+	cfg.FanControl.MinSpeed = 20
+	cfg.FanControl.MaxSpeed = 80
+	fc := NewFanController(cfg, nil, nil, nil)
+
+	// Above max clamps down; an infinite (0) duration is capped, not held forever.
+	fc.SetOverride(100, 0, "too high")
+	if fc.override.Speed != 80 {
+		t.Fatalf("override speed above max not clamped: got %d, want 80", fc.override.Speed)
+	}
+	if fc.override.ExpiresAt.IsZero() {
+		t.Fatal("override with duration 0 must be capped to a finite expiry, not infinite")
+	}
+	if d := time.Until(fc.override.ExpiresAt); d > maxOverrideDuration+time.Minute {
+		t.Fatalf("infinite override not capped to %s: expires in %s", maxOverrideDuration, d)
+	}
+
+	// Below min clamps up.
+	fc.SetOverride(1, time.Hour, "too low")
+	if fc.override.Speed != 20 {
+		t.Fatalf("override speed below min not clamped: got %d, want 20", fc.override.Speed)
+	}
+
+	// A duration beyond the cap is capped.
+	fc.SetOverride(50, 48*time.Hour, "too long")
+	if d := time.Until(fc.override.ExpiresAt); d > maxOverrideDuration+time.Minute {
+		t.Fatalf("override duration not capped to %s: expires in %s", maxOverrideDuration, d)
+	}
+}
+
+// calculateTarget must clamp the override even if an override was set directly
+// (defense in depth), while temperatures are non-critical.
+func TestCalculateTargetClampsOverride(t *testing.T) {
+	cfg := config.Default()
+	cfg.FanControl.MinSpeed = 20
+	cfg.FanControl.MaxSpeed = 80
+	fc := NewFanController(cfg, nil, nil, nil)
+
+	cpuR, gpuR := cpuGpu(30, 30) // well below any threshold
+
+	fc.override = &Override{Speed: 100} // set directly, bypassing SetOverride's clamp
+	if got := fc.calculateTarget(cpuR, gpuR); got != 80 {
+		t.Fatalf("override not clamped to max in calculateTarget: got %d, want 80", got)
+	}
+
+	fc.override = &Override{Speed: 1}
+	if got := fc.calculateTarget(cpuR, gpuR); got != 20 {
+		t.Fatalf("override not clamped to min in calculateTarget: got %d, want 20", got)
+	}
+}
+
+// A critical temperature must still ramp to MaxSpeed even when a (clamped) low
+// manual override is active — the Tier 1 emergency behavior must not regress.
+func TestCriticalOverridesClampedOverride(t *testing.T) {
+	cfg := config.Default()
+	cfg.FanControl.MinSpeed = 20
+	cfg.FanControl.MaxSpeed = 100
+	cfg.FanControl.CriticalCPUTemp = 85
+	fc := NewFanController(cfg, nil, nil, nil)
+
+	fc.SetOverride(20, time.Hour, "low manual") // clamped, low
+	cpuR, gpuR := cpuGpu(95, 30)                // CPU past critical
+	if got := fc.calculateTarget(cpuR, gpuR); got != 100 {
+		t.Fatalf("critical ramp did not override clamped override: got %d, want 100", got)
+	}
+}
