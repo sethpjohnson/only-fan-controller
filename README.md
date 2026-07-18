@@ -424,9 +424,9 @@ All config options can be overridden via environment variables:
 
 ## Unraid Installation
 
-1. Copy `unraid/only-fan-controller.xml` to `/boot/config/plugins/dockerMan/templates-user/`
-2. Configure via the Unraid Docker UI
-3. Or use Community Applications (search "Only Fan Controller")
+**Community Applications (recommended):** open the **Apps** tab, search **"Only Fan Controller"**, set your iDRAC host / username / password, and start it.
+
+**Manual:** copy `templates/only-fan-controller.xml` to `/boot/config/plugins/dockerMan/templates-user/` and configure via the Docker UI.
 
 ## Upgrading
 
