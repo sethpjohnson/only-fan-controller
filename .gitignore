@@ -1,6 +1,7 @@
 # Binaries (in root or cmd folder)
 /only-fan-controller
 /smart-fan-controller
+/controller
 /cmd/controller/controller
 *.exe
 
