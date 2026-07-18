@@ -14,6 +14,9 @@
 # dex task state
 .dex/
 
+# AI assistant local context (personal, not shared)
+CLAUDE.md
+
 # OS
 .DS_Store
 Thumbs.db
