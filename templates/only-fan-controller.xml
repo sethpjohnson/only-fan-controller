@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>only-fan-controller</Name>
+  <Name>Only Fan Controller</Name>
   <Repository>ghcr.io/sethpjohnson/only-fan-controller:latest</Repository>
   <Registry>https://ghcr.io/</Registry>
   <Network>bridge</Network>
@@ -9,7 +9,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/sethpjohnson/only-fan-controller/issues</Support>
   <Project>https://github.com/sethpjohnson/only-fan-controller</Project>
-  <Overview>Intelligent, quiet fan control for Dell PowerEdge (iDRAC) servers, with optional NVIDIA GPU awareness and Home Assistant integration. Reads CPU temperatures over IPMI and GPU temperatures via nvidia-smi, then drives the fans through the iDRAC's manual fan commands - quiet at idle, ramping under load, without the iDRAC's aggressive default curve. Fail-safe by design: if a sensor read or the process itself fails, fan control is handed back to the BMC so the server is never left uncooled.</Overview>
+  <Overview>Quiet, threshold-based fan control for Dell PowerEdge (iDRAC) servers, with optional NVIDIA GPU monitoring and Home Assistant integration.</Overview>
   <Description>Threshold-based fan controller for Dell PowerEdge servers (built and tested on an R730).&#xD;&#xA;&#xD;&#xA;**Features**&#xD;&#xA;- Threshold control with hysteresis (no fan oscillation)&#xD;&#xA;- CPU temps via IPMI (ipmitool); optional per-card GPU temps via nvidia-smi&#xD;&#xA;- Fail-safe: sensor/process failure hands cooling back to the BMC's automatic control&#xD;&#xA;- Real-time web dashboard + JSON API&#xD;&#xA;- Optional Home Assistant integration over MQTT (auto-discovery: per-GPU temperature/utilization/power, fan-speed control, availability)&#xD;&#xA;&#xD;&#xA;**Requirements**&#xD;&#xA;- A Dell server with iDRAC reachable on the network (IPMI over LAN enabled). Fill in the iDRAC Host / Username / Password fields.&#xD;&#xA;&#xD;&#xA;**NVIDIA GPU (optional)**&#xD;&#xA;- To monitor GPU temps: set "Enable GPU Monitoring" = true AND add `--runtime=nvidia` to Extra Parameters (requires the Unraid NVIDIA Driver plugin). Leave both off on CPU-only systems.&#xD;&#xA;&#xD;&#xA;**Note**&#xD;&#xA;- While running, this puts the iDRAC in manual fan mode; see the project's README Safety section. Support via GitHub Issues.</Description>
   <Category>Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:8086]/dashboard/</WebUI>
