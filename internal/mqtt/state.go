@@ -26,11 +26,25 @@ type statePayload struct {
 	OverrideReason  *string `json:"override_reason"`
 	OverrideExpires *string `json:"override_expires"`
 	ActiveHintCount int     `json:"active_hint_count"`
+	// CPUs carries one entry per CPU socket, so Home Assistant can show per-socket
+	// temperature on a multi-socket box. CPUTemp above stays the overall max (fan
+	// logic and the aggregate sensor depend on it). IPMI reports only per-socket
+	// temperature — no utilization/power. The per-socket discovery entities index
+	// into this array by position (cpus[0], cpus[1], ...).
+	CPUs []cpuState `json:"cpus"`
 	// GPUs carries one entry per detected GPU device, so Home Assistant can show
 	// per-card temperature/utilization/power. GPUTemp above stays the overall max
 	// (fan logic and the aggregate sensor depend on it). The per-card discovery
 	// entities index into this array by position (gpus[0], gpus[1], ...).
 	GPUs []gpuState `json:"gpus"`
+}
+
+// cpuState is one per-socket entry in statePayload.CPUs. Keys here MUST stay in
+// sync with the value_templates emitted by the per-CPU discovery sensors (see
+// discovery.go); the key-correspondence test guards against drift.
+type cpuState struct {
+	Index int `json:"index"`
+	Temp  int `json:"temp"`
 }
 
 // gpuState is one per-card entry in statePayload.GPUs. Keys here MUST stay in
@@ -60,6 +74,9 @@ func buildStatePayload(status *controller.Status) statePayload {
 	if status.CPU != nil {
 		v := status.CPU.Max
 		p.CPUTemp = &v
+		for i, t := range status.CPU.Temps {
+			p.CPUs = append(p.CPUs, cpuState{Index: i, Temp: t})
+		}
 	}
 	if status.GPU != nil {
 		v := status.GPU.Max
@@ -119,6 +136,50 @@ func (b *Bridge) publishState() {
 	// ticks. Gating on the successful publish also avoids retrying/logging
 	// discovery while the broker is down.
 	b.publishNewGPUDiscovery(status)
+	b.publishNewCPUDiscovery(status)
+}
+
+// publishNewCPUDiscovery publishes retained discovery configs for any CPU socket
+// in status whose index has not yet been announced on the current connection,
+// then records it so it is not republished every tick. The socket count is fixed
+// at boot, so this settles on the first tick — but the lazy, gated approach is
+// still required for the same cold-start reason GPUs use: MQTT connects before
+// the control loop's first CPU read, so the reading is empty at connect and only
+// populated by later ticks. cpuDiscovered is mutex-guarded because onConnect
+// clears it from paho's goroutine while this runs on the publish-loop goroutine.
+// A socket is marked announced only if its config published cleanly, so a
+// transient failure is retried on a later tick.
+func (b *Bridge) publishNewCPUDiscovery(status *controller.Status) {
+	if status == nil || status.CPU == nil {
+		return
+	}
+	for i := range status.CPU.Temps {
+		b.cpuDiscMu.Lock()
+		already := b.cpuDiscovered[i]
+		b.cpuDiscMu.Unlock()
+		if already {
+			continue
+		}
+		published := true
+		for _, s := range b.cpuDeviceSpecs(i) {
+			payload, err := json.Marshal(s.config)
+			if err != nil {
+				log.Printf("MQTT: failed to marshal CPU discovery for %s/%s: %v", s.component, s.objectID, err)
+				published = false
+				continue
+			}
+			topic := b.discoveryTopic(s.component, s.objectID)
+			if err := b.client.Publish(topic, 1, true, payload); err != nil {
+				log.Printf("MQTT: failed to publish CPU discovery %s: %v", topic, err)
+				published = false
+			}
+		}
+		if published {
+			b.cpuDiscMu.Lock()
+			b.cpuDiscovered[i] = true
+			b.cpuDiscMu.Unlock()
+		}
+	}
 }
 
 // publishNewGPUDiscovery publishes retained discovery configs for any GPU device
