@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<CommunityApplications>
+  <Profile>Only Fan Controller — intelligent, quiet fan control for Dell PowerEdge (iDRAC) servers, with optional NVIDIA GPU awareness and Home Assistant (MQTT) integration. Reads CPU temps over IPMI and GPU temps via nvidia-smi and drives the fans through the iDRAC, with a fail-safe hand-back to the BMC. Support is via GitHub Issues on the project repository.</Profile>
+  <Icon>https://raw.githubusercontent.com/sethpjohnson/only-fan-controller/main/icon.png</Icon>
+  <WebPage>https://github.com/sethpjohnson/only-fan-controller</WebPage>
+</CommunityApplications>
