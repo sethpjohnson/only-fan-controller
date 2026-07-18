@@ -130,7 +130,7 @@ type discoverySpec struct {
 // (not expected for these primitive maps) are logged and skipped.
 func (b *Bridge) discoveryEntities() []discoveryEntity {
 	specs := []discoverySpec{
-		{"sensor", "cpu_temp", b.sensorConfig("cpu_temp", "CPU Temperature", "cpu_temp", "temperature", "°C", "")},
+		{"sensor", "cpu_temp", b.sensorConfig("cpu_temp", "CPU Temperature (Max)", "cpu_temp", "temperature", "°C", "")},
 		{"sensor", "gpu_temp", b.sensorConfig("gpu_temp", "GPU Temperature (Max)", "gpu_temp", "temperature", "°C", "")},
 		{"sensor", "fan_speed", b.sensorConfig("fan_speed", "Fan Speed", "fan_speed", "", "%", "mdi:fan")},
 		{"sensor", "target_speed", b.sensorConfig("target_speed", "Target Fan Speed", "target_speed", "", "%", "mdi:fan")},
@@ -181,6 +181,27 @@ func (b *Bridge) gpuDeviceSpecs(arrayIndex int, d monitor.GPUDevice) []discovery
 		{"sensor", powerID, b.gpuSensorConfig(
 			powerID, label+" Power",
 			fmt.Sprintf("value_json.gpus[%d].power", arrayIndex), "power", "W")},
+	}
+}
+
+// cpuDeviceSpecs builds the single temperature discovery sensor for one CPU
+// socket. IPMI exposes only per-socket temperature (no utilization/power), so
+// unlike gpuDeviceSpecs this returns just one sensor.
+//
+// index is both the socket's position in the state `cpus` array (what the
+// value_template indexes into, matching the order buildStatePayload appends
+// sockets) and the key for the stable object_id/unique_id (cpu0_temp, cpu1_temp,
+// ...) so entities survive restarts and preserve HA history. Unlike GPUs, a CPU
+// socket's index IS its array position, so one value serves both roles. The
+// label is 1-based ("CPU 1 Temperature") for human readability. The sensor
+// shares the one HA device block and availability topic used by every other
+// entity.
+func (b *Bridge) cpuDeviceSpecs(index int) []discoverySpec {
+	tempID := fmt.Sprintf("cpu%d_temp", index)
+	return []discoverySpec{
+		{"sensor", tempID, b.gpuSensorConfig(
+			tempID, fmt.Sprintf("CPU %d Temperature", index+1),
+			fmt.Sprintf("value_json.cpus[%d].temp", index), "temperature", "°C")},
 	}
 }
 

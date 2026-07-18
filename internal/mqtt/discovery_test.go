@@ -38,6 +38,29 @@ func TestDiscoveryEntitiesCoverAllEntities(t *testing.T) {
 	}
 }
 
+func TestCPUAggregateSensorLabel(t *testing.T) {
+	h := &clientHolder{}
+	b := New(testConfig(), &fakeConsumer{}, h.factory)
+	var payload map[string]any
+	for _, e := range b.discoveryEntities() {
+		if e.topic == "homeassistant/sensor/only-fan-controller/cpu_temp/config" {
+			if err := json.Unmarshal(e.payload, &payload); err != nil {
+				t.Fatalf("unmarshal cpu_temp config: %v", err)
+			}
+		}
+	}
+	if payload == nil {
+		t.Fatal("cpu_temp aggregate sensor not found")
+	}
+	if payload["name"].(string) != "CPU Temperature (Max)" {
+		t.Fatalf("cpu_temp name = %v, want %q", payload["name"], "CPU Temperature (Max)")
+	}
+	// The aggregate binds to the flat cpu_temp key (the max), NOT the per-socket array.
+	if payload["value_template"].(string) != "{{ value_json.cpu_temp }}" {
+		t.Fatalf("cpu_temp value_template = %v", payload["value_template"])
+	}
+}
+
 func TestNumberEntityBoundsToConfiguredSpeeds(t *testing.T) {
 	cfg := testConfig()
 	cfg.FanControl.MinSpeed = 15

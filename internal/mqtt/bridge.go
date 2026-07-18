@@ -75,6 +75,13 @@ type Bridge struct {
 	// reconnect re-announces every card (keeping HA's retained configs fresh).
 	gpuDiscMu     sync.Mutex
 	gpuDiscovered map[int]bool
+	// cpuDiscovered tracks which CPU socket indices have had their discovery config
+	// published on the CURRENT connection, mirroring gpuDiscovered. It is guarded by
+	// cpuDiscMu for the same cross-goroutine reason (cleared on the OnConnect
+	// goroutine, checked/updated on the publish-loop goroutine) and cleared on
+	// (re)connect so a reconnect re-announces every socket.
+	cpuDiscMu     sync.Mutex
+	cpuDiscovered map[int]bool
 	// retainWarned tracks command topics we have already logged a dropped
 	// retained message for, so reconnect replays warn once per topic instead of
 	// flooding the log.
@@ -115,6 +122,7 @@ func New(cfg *config.Config, consumer Consumer, factory ClientFactory) *Bridge {
 		consumer:      consumer,
 		newClient:     factory,
 		gpuDiscovered: map[int]bool{},
+		cpuDiscovered: map[int]bool{},
 		retainWarned:  map[string]bool{},
 	}
 }
@@ -162,13 +170,15 @@ func (b *Bridge) Start() {
 // the entities registered and the command paths live before it sees them go
 // online.
 //
-// Per-GPU discovery is deliberately NOT published here: at cold start MQTT
-// connects before the control loop's first GPU read, so the device set is still
-// empty. It is announced lazily from the publish loop as devices appear (see
-// publishNewGPUDiscovery). Clearing gpuDiscovered on every (re)connect makes that
-// loop re-announce every card on the new connection.
+// Per-GPU and per-CPU discovery are deliberately NOT published here: at cold
+// start MQTT connects before the control loop's first sensor read, so the device
+// set is still empty. They are announced lazily from the publish loop as devices
+// appear (see publishNewGPUDiscovery / publishNewCPUDiscovery). Clearing the
+// discovered maps on every (re)connect makes that loop re-announce everything on
+// the new connection.
 func (b *Bridge) onConnect() {
 	b.resetGPUDiscovery()
+	b.resetCPUDiscovery()
 	b.publishDiscovery()
 	b.subscribeCommands()
 	b.publishAvailability(true)
@@ -180,6 +190,15 @@ func (b *Bridge) resetGPUDiscovery() {
 	b.gpuDiscMu.Lock()
 	b.gpuDiscovered = map[int]bool{}
 	b.gpuDiscMu.Unlock()
+}
+
+// resetCPUDiscovery forgets which CPU socket indices have been announced, so the
+// publish loop re-publishes per-CPU discovery on the next tick. Called on
+// (re)connect.
+func (b *Bridge) resetCPUDiscovery() {
+	b.cpuDiscMu.Lock()
+	b.cpuDiscovered = map[int]bool{}
+	b.cpuDiscMu.Unlock()
 }
 
 // publishAvailability publishes the retained availability state.
